@@ -227,9 +227,9 @@ export const useSim = create<SimState & Actions>((set, get) => ({
           to.nextJobs = [...to.nextJobs, jobId];
         }
       }
-      const jobs = s.jobs.map((j) =>
+      const jobs: Job[] = s.jobs.map((j) =>
         j.id === jobId
-          ? { ...j, assignedEngineer: toEngineerId, status: to?.currentJob === jobId ? "en_route" : "assigned" as const }
+          ? { ...j, assignedEngineer: toEngineerId, status: (to?.currentJob === jobId ? "en_route" : "assigned") as Job["status"] }
           : j
       );
       return { engineers, jobs };
