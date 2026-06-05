@@ -32,10 +32,13 @@ export function AppShell() {
         </div>
 
         <div className="flex items-center gap-1 px-3 py-1 rounded border border-panel-border bg-background/40">
-          <Radio size={12} className="text-status-ok pulse-dot" />
-          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Live</span>
+          <Radio size={12} className={dayEnded ? "text-muted-foreground" : "text-status-ok pulse-dot"} />
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{dayEnded ? "Closed" : "Live"}</span>
           <span className="font-mono text-xs ml-2 text-status-info">{fmtTime(simTimeMinutes)}</span>
           <span className="font-mono text-[10px] ml-2 text-muted-foreground">T{String(tick).padStart(3, "0")}</span>
+          {dayEnded && (
+            <span className="ml-2 text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-status-crit/15 text-status-crit">EOD</span>
+          )}
         </div>
 
         <Metric label="SLA Health" value={`${metrics.slaHealth}%`} accent={metrics.slaHealth > 80 ? "ok" : metrics.slaHealth > 60 ? "warn" : "crit"} />
