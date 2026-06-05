@@ -476,13 +476,18 @@ function stepTick() {
     breached,
   };
 
-  // Generate recommendations
-  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations };
-  let recs = computeRecommendations(state);
+  // Prune dismissed IDs for jobs that no longer exist / are closed
+  const dismissedRecs = pruneDismissed(s.dismissedRecs, jobs);
 
-  // Autopilot auto-accept top recs
-  if (s.systemMode === "autopilot" && recs.length > 0) {
-    const top = recs.slice(0, 2);
+  // Generate recommendations
+  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations, dismissedRecs };
+  const fresh = computeRecommendations(state);
+
+  // Autopilot auto-accept top recs (and dismiss them so they don't reappear)
+  const autoDismissed: string[] = [];
+  let actionable = fresh;
+  if (s.systemMode === "autopilot" && fresh.length > 0) {
+    const top = fresh.slice(0, 2);
     for (const r of top) {
       if (r.type === "reassign" && r.toEngineer) {
         // perform reassignment immediately
@@ -507,6 +512,7 @@ function stepTick() {
           metrics.aiAcceptedCount += 1;
           metrics.revenueProtected += r.revenueProtected;
           metrics.travelSavedMin += r.travelReductionMin;
+          autoDismissed.push(r.id);
           events = pushEvent(events, {
             tick, kind: "reassigned", severity: "ok",
             message: `[AUTOPILOT] ${r.reasoning}`,
@@ -514,8 +520,14 @@ function stepTick() {
         }
       }
     }
-    recs = recs.filter((r) => !top.includes(r));
+    actionable = fresh.filter((r) => !autoDismissed.includes(r.id));
   }
+
+  // Merge with existing so unchanged recs keep their identity (no re-animation)
+  const mergedRecs = mergeRecs(s.recommendations, actionable);
+  const nextDismissed = autoDismissed.length
+    ? [...dismissedRecs, ...autoDismissed.filter((id) => !dismissedRecs.includes(id))]
+    : dismissedRecs;
 
   useSim.setState({
     tick,
@@ -525,9 +537,11 @@ function stepTick() {
     traffic,
     events,
     metrics,
-    recommendations: recs,
+    recommendations: mergedRecs,
+    dismissedRecs: nextDismissed,
   });
 }
+
 
 function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
   // score by skill match + distance + load
