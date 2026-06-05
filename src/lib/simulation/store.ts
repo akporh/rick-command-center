@@ -413,30 +413,42 @@ function stepTick() {
     });
   }
 
+  // Day window — stop injection past EOD, and back-pressure during the day
+  const pastEOD = simTimeMinutes >= DAY_END_MIN;
+  const openCount = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+  const capacity = engineers.length * MAX_QUEUE;
+  const loadRatio = Math.min(1, openCount / Math.max(1, capacity));
+  const backPressure = Math.max(0, 1 - loadRatio);
+
   // Job injection
-  const injectionChance = s.simMode === "stress" ? 0.45 : 0.2;
-  if (rng() < injectionChance) {
-    jobCounter++;
-    const j = newJob(jobCounter, tick, rng, false);
-    jobs.push(j);
-    events = pushEvent(events, {
-      tick, kind: "job_injected", severity: "info",
-      message: `New job booked: ${j.title} @ ${j.customer}`,
-    });
-  }
-  // Emergency
-  if (rng() < (s.simMode === "stress" ? 0.08 : 0.025)) {
-    jobCounter++;
-    const j = newJob(jobCounter, tick, rng, true);
-    jobs.push(j);
-    events = pushEvent(events, {
-      tick, kind: "emergency_injected", severity: "crit",
-      message: `🚨 Emergency: ${j.title} @ ${j.customer}`,
-    });
+  if (!pastEOD) {
+    const base = s.simMode === "stress" ? 0.45 : 0.2;
+    const floor = s.simMode === "stress" ? 0.15 : 0;
+    const injectionChance = Math.max(floor, base * backPressure);
+    if (rng() < injectionChance) {
+      jobCounter++;
+      const j = newJob(jobCounter, tick, rng, false);
+      jobs.push(j);
+      events = pushEvent(events, {
+        tick, kind: "job_injected", severity: "info",
+        message: `New job booked: ${j.title} @ ${j.customer}`,
+      });
+    }
+    // Emergency
+    const emBase = s.simMode === "stress" ? 0.08 : 0.025;
+    if (rng() < emBase * Math.max(0.3, backPressure)) {
+      jobCounter++;
+      const j = newJob(jobCounter, tick, rng, true);
+      jobs.push(j);
+      events = pushEvent(events, {
+        tick, kind: "emergency_injected", severity: "crit",
+        message: `🚨 Emergency: ${j.title} @ ${j.customer}`,
+      });
+    }
   }
 
   // Scripted demo waypoints
-  if (s.simMode === "scripted") {
+  if (s.simMode === "scripted" && !pastEOD) {
     if (tick === 6) {
       // first disruption — force a delay
       const e = engineers.find((x) => x.status === "en_route");
