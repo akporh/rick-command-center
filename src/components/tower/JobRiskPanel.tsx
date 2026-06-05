@@ -32,6 +32,9 @@ export function JobRiskPanel() {
                 <span className="font-mono text-xs font-bold">{j.id}</span>
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: priorityColor(j.priority) }} />
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{j.priority}</span>
+                {!j.assignedEngineer && (
+                  <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-status-warn/15 text-status-warn">Unassigned · no capacity</span>
+                )}
                 <span className="ml-auto text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: band.bg, color: band.color }}>
                   {band.label}
                 </span>
