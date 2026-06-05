@@ -15,7 +15,7 @@ const navItems = [
 
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const { running, toggle, speed, setSpeed, systemMode, setSystemMode, simTimeMinutes, metrics, engineers, jobs, tick } = useSim();
+  const { running, toggle, speed, setSpeed, systemMode, setSystemMode, simTimeMinutes, metrics, engineers, jobs, tick, dayEnded } = useSim();
   const active = engineers.filter((e) => e.status !== "idle").length;
   const openJobs = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
 
