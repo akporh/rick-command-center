@@ -611,10 +611,11 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
     for (const e of s.engineers) {
       if (e.id === job.assignedEngineer) continue;
       if (e.status === "delayed") continue;
+      const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
+      if (load >= MAX_QUEUE) continue;
       const skillMatch = e.skills.includes(job.skill) ? 1 : 0.5;
       const d = dist(e.location, job.location);
       const curD = currentEng ? dist(currentEng.location, job.location) : 1000;
-      const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
       const gain = (curD - d) * 0.5 + (skillMatch - 0.7) * 80 - load * 15;
       if (gain > bestGain) { bestGain = gain; bestCandidate = e; }
     }
