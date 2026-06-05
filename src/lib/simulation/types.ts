@@ -101,8 +101,10 @@ export interface SimState {
   jobs: Job[];
   traffic: TrafficZone[];
   recommendations: AIRecommendation[];
+  dismissedRecs: string[];
   events: SimEvent[];
   metrics: {
+
     slaHealth: number;
     completed: number;
     breached: number;

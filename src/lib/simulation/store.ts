@@ -79,6 +79,8 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   jobs: initialJobs,
   traffic: [],
   recommendations: [],
+  dismissedRecs: [],
+
   events: [{
     id: uid("ev"),
     tick: 0,
@@ -129,7 +131,9 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       jobs: seedJobs(14, makeRng(seed + 2)),
       traffic: [],
       recommendations: [],
+      dismissedRecs: [],
       events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
+
       metrics: {
         slaHealth: 100, completed: 0, breached: 0, revenueProtected: 0,
         travelSavedMin: 0, aiAcceptedCount: 0, manualBaselineSla: 84,
@@ -155,15 +159,17 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   },
   recomputeAll: () => {
     const s = get();
-    const recs = computeRecommendations(s);
+    const fresh = computeRecommendations(s);
+    const merged = mergeRecs(s.recommendations, fresh);
     set({
-      recommendations: recs,
+      recommendations: merged,
       events: pushEvent(s.events, {
         tick: s.tick, kind: "ai_recommendation", severity: "info",
-        message: `Optimiser pass: ${recs.length} recommendation${recs.length === 1 ? "" : "s"} generated.`,
+        message: `Optimiser pass: ${merged.length} recommendation${merged.length === 1 ? "" : "s"} active.`,
       }),
     });
   },
+
   resolveSlaRisks: () => {
     const s = get();
     // accept all reassign recs targeting high-risk jobs
@@ -190,6 +196,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
     }
     set((cur) => ({
       recommendations: cur.recommendations.filter((x) => x.id !== id),
+      dismissedRecs: cur.dismissedRecs.includes(id) ? cur.dismissedRecs : [...cur.dismissedRecs, id],
       metrics: {
         ...cur.metrics,
         aiAcceptedCount: cur.metrics.aiAcceptedCount + 1,
@@ -205,12 +212,14 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   rejectRecommendation: (id) => {
     set((s) => ({
       recommendations: s.recommendations.filter((x) => x.id !== id),
+      dismissedRecs: s.dismissedRecs.includes(id) ? s.dismissedRecs : [...s.dismissedRecs, id],
       events: pushEvent(s.events, {
         tick: s.tick, kind: "ai_recommendation", severity: "warn",
         message: `Recommendation rejected by dispatcher.`,
       }),
     }));
   },
+
   reassign: (jobId, toEngineerId) => {
     set((s) => {
       const engineers = s.engineers.map((e) => ({
@@ -467,13 +476,18 @@ function stepTick() {
     breached,
   };
 
-  // Generate recommendations
-  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations };
-  let recs = computeRecommendations(state);
+  // Prune dismissed IDs for jobs that no longer exist / are closed
+  const dismissedRecs = pruneDismissed(s.dismissedRecs, jobs);
 
-  // Autopilot auto-accept top recs
-  if (s.systemMode === "autopilot" && recs.length > 0) {
-    const top = recs.slice(0, 2);
+  // Generate recommendations
+  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations, dismissedRecs };
+  const fresh = computeRecommendations(state);
+
+  // Autopilot auto-accept top recs (and dismiss them so they don't reappear)
+  const autoDismissed: string[] = [];
+  let actionable = fresh;
+  if (s.systemMode === "autopilot" && fresh.length > 0) {
+    const top = fresh.slice(0, 2);
     for (const r of top) {
       if (r.type === "reassign" && r.toEngineer) {
         // perform reassignment immediately
@@ -498,6 +512,7 @@ function stepTick() {
           metrics.aiAcceptedCount += 1;
           metrics.revenueProtected += r.revenueProtected;
           metrics.travelSavedMin += r.travelReductionMin;
+          autoDismissed.push(r.id);
           events = pushEvent(events, {
             tick, kind: "reassigned", severity: "ok",
             message: `[AUTOPILOT] ${r.reasoning}`,
@@ -505,8 +520,14 @@ function stepTick() {
         }
       }
     }
-    recs = recs.filter((r) => !top.includes(r));
+    actionable = fresh.filter((r) => !autoDismissed.includes(r.id));
   }
+
+  // Merge with existing so unchanged recs keep their identity (no re-animation)
+  const mergedRecs = mergeRecs(s.recommendations, actionable);
+  const nextDismissed = autoDismissed.length
+    ? [...dismissedRecs, ...autoDismissed.filter((id) => !dismissedRecs.includes(id))]
+    : dismissedRecs;
 
   useSim.setState({
     tick,
@@ -516,9 +537,11 @@ function stepTick() {
     traffic,
     events,
     metrics,
-    recommendations: recs,
+    recommendations: mergedRecs,
+    dismissedRecs: nextDismissed,
   });
 }
+
 
 function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
   // score by skill match + distance + load
@@ -537,6 +560,7 @@ function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
 
 function computeRecommendations(s: SimState): AIRecommendation[] {
   const recs: AIRecommendation[] = [];
+  const dismissed = new Set(s.dismissedRecs);
   const sorted = [...s.jobs]
     .filter((j) => j.status !== "completed" && j.status !== "breached")
     .sort((a, b) => b.riskScore - a.riskScore)
@@ -558,12 +582,13 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
       if (gain > bestGain) { bestGain = gain; bestCandidate = e; }
     }
     if (bestCandidate && bestGain > 10) {
-      recCounter++;
+      const id = `R-reassign-${job.id}-${bestCandidate.id}`;
+      if (dismissed.has(id)) continue;
       const slaImprovement = Math.min(70, Math.round(bestGain * 0.6 + job.riskScore * 0.2));
       const travelReductionMin = Math.max(5, Math.round(bestGain * 0.4));
       const conf = Math.min(98, 55 + Math.round(bestGain / 2));
       recs.push({
-        id: `R-${s.tick}-${recCounter}`,
+        id,
         type: "reassign",
         jobId: job.id,
         fromEngineer: currentEng?.id,
@@ -576,9 +601,10 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
         createdAtTick: s.tick,
       });
     } else if (job.riskScore > 80) {
-      recCounter++;
+      const id = `R-escalate-${job.id}`;
+      if (dismissed.has(id)) continue;
       recs.push({
-        id: `R-${s.tick}-${recCounter}`,
+        id,
         type: "escalate",
         jobId: job.id,
         reasoning: `Escalate ${job.id} — no viable rescue, notify ${job.customer} and pre-empt penalty`,
@@ -592,6 +618,33 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
   }
   return recs.slice(0, 5);
 }
+
+// Merge fresh recommendations with existing ones, preserving identity of
+// already-shown cards so they don't re-animate every tick. Drops existing
+// recs that are no longer relevant (job resolved / no longer suggested).
+function mergeRecs(existing: AIRecommendation[], fresh: AIRecommendation[]): AIRecommendation[] {
+  const freshById = new Map(fresh.map((r) => [r.id, r]));
+  const kept = existing.filter((r) => freshById.has(r.id));
+  const keptIds = new Set(kept.map((r) => r.id));
+  const added = fresh.filter((r) => !keptIds.has(r.id));
+  return [...kept, ...added].slice(0, 5);
+}
+
+// Prune dismissed IDs whose underlying job no longer exists or is closed,
+// so the set doesn't grow forever and identical situations can resurface
+// after a job completes/breaches.
+function pruneDismissed(dismissed: string[], jobs: Job[]): string[] {
+  const liveJobIds = new Set(
+    jobs.filter((j) => j.status !== "completed" && j.status !== "breached").map((j) => j.id),
+  );
+  return dismissed.filter((id) => {
+    // id format: R-<type>-<jobId>[-<engId>]
+    const parts = id.split("-");
+    const jobId = parts[2];
+    return liveJobIds.has(jobId);
+  });
+}
+
 
 // Auto-boot
 if (typeof window !== "undefined") {
