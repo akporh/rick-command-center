@@ -102,6 +102,7 @@ export interface SimState {
   traffic: TrafficZone[];
   recommendations: AIRecommendation[];
   dismissedRecs: string[];
+  dayEnded: boolean;
   events: SimEvent[];
   metrics: {
 

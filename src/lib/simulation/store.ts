@@ -13,6 +13,9 @@ import { makeRng, seedEngineers, seedJobs, newJob } from "./seed";
 
 const TICK_MS = 1500; // base tick ~1.5s real-time = "5-15s operational moment"
 const SIM_MINUTES_PER_TICK = 3;
+const DAY_END_MIN = 540; // 17:00 (08:00 + 9h)
+const WIND_DOWN_MIN = 30; // allow 30 sim-min of completion after EOD
+const MAX_QUEUE = 3; // max jobs (current + queued) per engineer
 
 let rng = makeRng(7);
 let eventCounter = 0;
@@ -80,6 +83,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   traffic: [],
   recommendations: [],
   dismissedRecs: [],
+  dayEnded: false,
 
   events: [{
     id: uid("ev"),
@@ -132,6 +136,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       traffic: [],
       recommendations: [],
       dismissedRecs: [],
+      dayEnded: false,
       events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
 
       metrics: {
@@ -408,30 +413,42 @@ function stepTick() {
     });
   }
 
+  // Day window — stop injection past EOD, and back-pressure during the day
+  const pastEOD = simTimeMinutes >= DAY_END_MIN;
+  const openCount = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+  const capacity = engineers.length * MAX_QUEUE;
+  const loadRatio = Math.min(1, openCount / Math.max(1, capacity));
+  const backPressure = Math.max(0, 1 - loadRatio);
+
   // Job injection
-  const injectionChance = s.simMode === "stress" ? 0.45 : 0.2;
-  if (rng() < injectionChance) {
-    jobCounter++;
-    const j = newJob(jobCounter, tick, rng, false);
-    jobs.push(j);
-    events = pushEvent(events, {
-      tick, kind: "job_injected", severity: "info",
-      message: `New job booked: ${j.title} @ ${j.customer}`,
-    });
-  }
-  // Emergency
-  if (rng() < (s.simMode === "stress" ? 0.08 : 0.025)) {
-    jobCounter++;
-    const j = newJob(jobCounter, tick, rng, true);
-    jobs.push(j);
-    events = pushEvent(events, {
-      tick, kind: "emergency_injected", severity: "crit",
-      message: `🚨 Emergency: ${j.title} @ ${j.customer}`,
-    });
+  if (!pastEOD) {
+    const base = s.simMode === "stress" ? 0.45 : 0.2;
+    const floor = s.simMode === "stress" ? 0.15 : 0;
+    const injectionChance = Math.max(floor, base * backPressure);
+    if (rng() < injectionChance) {
+      jobCounter++;
+      const j = newJob(jobCounter, tick, rng, false);
+      jobs.push(j);
+      events = pushEvent(events, {
+        tick, kind: "job_injected", severity: "info",
+        message: `New job booked: ${j.title} @ ${j.customer}`,
+      });
+    }
+    // Emergency
+    const emBase = s.simMode === "stress" ? 0.08 : 0.025;
+    if (rng() < emBase * Math.max(0.3, backPressure)) {
+      jobCounter++;
+      const j = newJob(jobCounter, tick, rng, true);
+      jobs.push(j);
+      events = pushEvent(events, {
+        tick, kind: "emergency_injected", severity: "crit",
+        message: `🚨 Emergency: ${j.title} @ ${j.customer}`,
+      });
+    }
   }
 
   // Scripted demo waypoints
-  if (s.simMode === "scripted") {
+  if (s.simMode === "scripted" && !pastEOD) {
     if (tick === 6) {
       // first disruption — force a delay
       const e = engineers.find((x) => x.status === "en_route");
@@ -529,6 +546,24 @@ function stepTick() {
     ? [...dismissedRecs, ...autoDismissed.filter((id) => !dismissedRecs.includes(id))]
     : dismissedRecs;
 
+  // End-of-day handling
+  let dayEnded = s.dayEnded;
+  if (!dayEnded && simTimeMinutes >= DAY_END_MIN + WIND_DOWN_MIN) {
+    dayEnded = true;
+    const openLeft = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+    events = pushEvent(events, {
+      tick, kind: "tick", severity: "info",
+      message: `🛑 End of Day 17:30 — ${metrics.completed} completed · ${metrics.breached} breached · ${openLeft} carried over · £${metrics.revenueProtected} protected`,
+    });
+    // pause loop on next frame
+    setTimeout(() => useSim.getState().stop(), 0);
+  } else if (!dayEnded && simTimeMinutes === DAY_END_MIN) {
+    events = pushEvent(events, {
+      tick, kind: "tick", severity: "warn",
+      message: `17:00 — End of shift. No new bookings; engineers winding down in-flight work.`,
+    });
+  }
+
   useSim.setState({
     tick,
     simTimeMinutes,
@@ -539,20 +574,22 @@ function stepTick() {
     metrics,
     recommendations: mergedRecs,
     dismissedRecs: nextDismissed,
+    dayEnded,
   });
 }
 
 
 function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
-  // score by skill match + distance + load
+  // score by skill match + distance + load; respect MAX_QUEUE
   let best: Engineer | null = null;
   let bestScore = -Infinity;
   for (const e of engineers) {
     if (e.status === "delayed") continue;
+    const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
+    if (load >= MAX_QUEUE) continue;
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
     const d = dist(e.location, job.location);
-    const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
-    const score = skillMatch * 100 - d * 0.1 - load * 25 + e.efficiency * 0.2 - e.fatigue * 0.1;
+    const score = skillMatch * 100 - d * 0.1 - load * 35 + e.efficiency * 0.2 - e.fatigue * 0.1;
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
@@ -574,10 +611,11 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
     for (const e of s.engineers) {
       if (e.id === job.assignedEngineer) continue;
       if (e.status === "delayed") continue;
+      const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
+      if (load >= MAX_QUEUE) continue;
       const skillMatch = e.skills.includes(job.skill) ? 1 : 0.5;
       const d = dist(e.location, job.location);
       const curD = currentEng ? dist(currentEng.location, job.location) : 1000;
-      const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
       const gain = (curD - d) * 0.5 + (skillMatch - 0.7) * 80 - load * 15;
       if (gain > bestGain) { bestGain = gain; bestCandidate = e; }
     }
@@ -616,6 +654,40 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
       });
     }
   }
+
+  // Rebalance pass: drain overloaded engineer tails onto lighter ones
+  const loads = s.engineers.map((e) => ({ e, load: (e.currentJob ? 1 : 0) + e.nextJobs.length }));
+  const sortedLoads = [...loads].sort((a, b) => a.load - b.load);
+  const median = sortedLoads[Math.floor(sortedLoads.length / 2)].load;
+  const overloaded = loads.filter((l) => l.load >= median + 2 && l.e.nextJobs.length > 0);
+  for (const { e: heavy } of overloaded) {
+    const tailJobId = heavy.nextJobs[heavy.nextJobs.length - 1];
+    const tailJob = s.jobs.find((j) => j.id === tailJobId);
+    if (!tailJob) continue;
+    // pick lightest eligible
+    const lightest = sortedLoads.find(
+      (l) => l.e.id !== heavy.id && l.load < MAX_QUEUE && l.e.status !== "delayed" && l.load <= median,
+    );
+    if (!lightest) continue;
+    const id = `R-reassign-${tailJob.id}-${lightest.e.id}`;
+    if (new Set(s.dismissedRecs).has(id)) continue;
+    if (recs.some((r) => r.id === id)) continue;
+    const slack = (heavy.nextJobs.length - lightest.load) * 12;
+    recs.push({
+      id,
+      type: "reassign",
+      jobId: tailJob.id,
+      fromEngineer: heavy.id,
+      toEngineer: lightest.e.id,
+      reasoning: `Rebalance: move ${tailJob.id} from ${heavy.name.split(" ")[0]} (queue ${heavy.nextJobs.length + (heavy.currentJob ? 1 : 0)}) → ${lightest.e.name.split(" ")[0]} (queue ${lightest.load}) to recover ~${slack} min slack`,
+      slaImprovement: Math.min(45, 15 + slack),
+      travelReductionMin: Math.max(8, slack),
+      revenueProtected: Math.round(tailJob.revenue * 0.25),
+      confidence: 72,
+      createdAtTick: s.tick,
+    });
+  }
+
   return recs.slice(0, 5);
 }
 
