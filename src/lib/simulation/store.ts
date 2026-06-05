@@ -80,6 +80,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   traffic: [],
   recommendations: [],
   dismissedRecs: [],
+  dayEnded: false,
 
   events: [{
     id: uid("ev"),
