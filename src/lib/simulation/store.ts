@@ -580,15 +580,16 @@ function stepTick() {
 
 
 function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
-  // score by skill match + distance + load
+  // score by skill match + distance + load; respect MAX_QUEUE
   let best: Engineer | null = null;
   let bestScore = -Infinity;
   for (const e of engineers) {
     if (e.status === "delayed") continue;
+    const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
+    if (load >= MAX_QUEUE) continue;
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
     const d = dist(e.location, job.location);
-    const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
-    const score = skillMatch * 100 - d * 0.1 - load * 25 + e.efficiency * 0.2 - e.fatigue * 0.1;
+    const score = skillMatch * 100 - d * 0.1 - load * 35 + e.efficiency * 0.2 - e.fatigue * 0.1;
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
