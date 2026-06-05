@@ -654,6 +654,40 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
       });
     }
   }
+
+  // Rebalance pass: drain overloaded engineer tails onto lighter ones
+  const loads = s.engineers.map((e) => ({ e, load: (e.currentJob ? 1 : 0) + e.nextJobs.length }));
+  const sortedLoads = [...loads].sort((a, b) => a.load - b.load);
+  const median = sortedLoads[Math.floor(sortedLoads.length / 2)].load;
+  const overloaded = loads.filter((l) => l.load >= median + 2 && l.e.nextJobs.length > 0);
+  for (const { e: heavy } of overloaded) {
+    const tailJobId = heavy.nextJobs[heavy.nextJobs.length - 1];
+    const tailJob = s.jobs.find((j) => j.id === tailJobId);
+    if (!tailJob) continue;
+    // pick lightest eligible
+    const lightest = sortedLoads.find(
+      (l) => l.e.id !== heavy.id && l.load < MAX_QUEUE && l.e.status !== "delayed" && l.load <= median,
+    );
+    if (!lightest) continue;
+    const id = `R-reassign-${tailJob.id}-${lightest.e.id}`;
+    if (new Set(s.dismissedRecs).has(id)) continue;
+    if (recs.some((r) => r.id === id)) continue;
+    const slack = (heavy.nextJobs.length - lightest.load) * 12;
+    recs.push({
+      id,
+      type: "reassign",
+      jobId: tailJob.id,
+      fromEngineer: heavy.id,
+      toEngineer: lightest.e.id,
+      reasoning: `Rebalance: move ${tailJob.id} from ${heavy.name.split(" ")[0]} (queue ${heavy.nextJobs.length + (heavy.currentJob ? 1 : 0)}) → ${lightest.e.name.split(" ")[0]} (queue ${lightest.load}) to recover ~${slack} min slack`,
+      slaImprovement: Math.min(45, 15 + slack),
+      travelReductionMin: Math.max(8, slack),
+      revenueProtected: Math.round(tailJob.revenue * 0.25),
+      confidence: 72,
+      createdAtTick: s.tick,
+    });
+  }
+
   return recs.slice(0, 5);
 }
 
