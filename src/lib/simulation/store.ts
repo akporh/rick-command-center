@@ -546,6 +546,7 @@ function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
 
 function computeRecommendations(s: SimState): AIRecommendation[] {
   const recs: AIRecommendation[] = [];
+  const dismissed = new Set(s.dismissedRecs);
   const sorted = [...s.jobs]
     .filter((j) => j.status !== "completed" && j.status !== "breached")
     .sort((a, b) => b.riskScore - a.riskScore)
@@ -567,12 +568,13 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
       if (gain > bestGain) { bestGain = gain; bestCandidate = e; }
     }
     if (bestCandidate && bestGain > 10) {
-      recCounter++;
+      const id = `R-reassign-${job.id}-${bestCandidate.id}`;
+      if (dismissed.has(id)) continue;
       const slaImprovement = Math.min(70, Math.round(bestGain * 0.6 + job.riskScore * 0.2));
       const travelReductionMin = Math.max(5, Math.round(bestGain * 0.4));
       const conf = Math.min(98, 55 + Math.round(bestGain / 2));
       recs.push({
-        id: `R-${s.tick}-${recCounter}`,
+        id,
         type: "reassign",
         jobId: job.id,
         fromEngineer: currentEng?.id,
@@ -585,9 +587,10 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
         createdAtTick: s.tick,
       });
     } else if (job.riskScore > 80) {
-      recCounter++;
+      const id = `R-escalate-${job.id}`;
+      if (dismissed.has(id)) continue;
       recs.push({
-        id: `R-${s.tick}-${recCounter}`,
+        id,
         type: "escalate",
         jobId: job.id,
         reasoning: `Escalate ${job.id} — no viable rescue, notify ${job.customer} and pre-empt penalty`,
@@ -601,6 +604,33 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
   }
   return recs.slice(0, 5);
 }
+
+// Merge fresh recommendations with existing ones, preserving identity of
+// already-shown cards so they don't re-animate every tick. Drops existing
+// recs that are no longer relevant (job resolved / no longer suggested).
+function mergeRecs(existing: AIRecommendation[], fresh: AIRecommendation[]): AIRecommendation[] {
+  const freshById = new Map(fresh.map((r) => [r.id, r]));
+  const kept = existing.filter((r) => freshById.has(r.id));
+  const keptIds = new Set(kept.map((r) => r.id));
+  const added = fresh.filter((r) => !keptIds.has(r.id));
+  return [...kept, ...added].slice(0, 5);
+}
+
+// Prune dismissed IDs whose underlying job no longer exists or is closed,
+// so the set doesn't grow forever and identical situations can resurface
+// after a job completes/breaches.
+function pruneDismissed(dismissed: string[], jobs: Job[]): string[] {
+  const liveJobIds = new Set(
+    jobs.filter((j) => j.status !== "completed" && j.status !== "breached").map((j) => j.id),
+  );
+  return dismissed.filter((id) => {
+    // id format: R-<type>-<jobId>[-<engId>]
+    const parts = id.split("-");
+    const jobId = parts[2];
+    return liveJobIds.has(jobId);
+  });
+}
+
 
 // Auto-boot
 if (typeof window !== "undefined") {
