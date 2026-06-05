@@ -159,15 +159,17 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   },
   recomputeAll: () => {
     const s = get();
-    const recs = computeRecommendations(s);
+    const fresh = computeRecommendations(s);
+    const merged = mergeRecs(s.recommendations, fresh);
     set({
-      recommendations: recs,
+      recommendations: merged,
       events: pushEvent(s.events, {
         tick: s.tick, kind: "ai_recommendation", severity: "info",
-        message: `Optimiser pass: ${recs.length} recommendation${recs.length === 1 ? "" : "s"} generated.`,
+        message: `Optimiser pass: ${merged.length} recommendation${merged.length === 1 ? "" : "s"} active.`,
       }),
     });
   },
+
   resolveSlaRisks: () => {
     const s = get();
     // accept all reassign recs targeting high-risk jobs
