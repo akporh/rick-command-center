@@ -13,6 +13,9 @@ import { makeRng, seedEngineers, seedJobs, newJob } from "./seed";
 
 const TICK_MS = 1500; // base tick ~1.5s real-time = "5-15s operational moment"
 const SIM_MINUTES_PER_TICK = 3;
+const DAY_END_MIN = 540; // 17:00 (08:00 + 9h)
+const WIND_DOWN_MIN = 30; // allow 30 sim-min of completion after EOD
+const MAX_QUEUE = 3; // max jobs (current + queued) per engineer
 
 let rng = makeRng(7);
 let eventCounter = 0;
