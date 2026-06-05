@@ -546,6 +546,24 @@ function stepTick() {
     ? [...dismissedRecs, ...autoDismissed.filter((id) => !dismissedRecs.includes(id))]
     : dismissedRecs;
 
+  // End-of-day handling
+  let dayEnded = s.dayEnded;
+  if (!dayEnded && simTimeMinutes >= DAY_END_MIN + WIND_DOWN_MIN) {
+    dayEnded = true;
+    const openLeft = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+    events = pushEvent(events, {
+      tick, kind: "tick", severity: "info",
+      message: `🛑 End of Day 17:30 — ${metrics.completed} completed · ${metrics.breached} breached · ${openLeft} carried over · £${metrics.revenueProtected} protected`,
+    });
+    // pause loop on next frame
+    setTimeout(() => useSim.getState().stop(), 0);
+  } else if (!dayEnded && simTimeMinutes === DAY_END_MIN) {
+    events = pushEvent(events, {
+      tick, kind: "tick", severity: "warn",
+      message: `17:00 — End of shift. No new bookings; engineers winding down in-flight work.`,
+    });
+  }
+
   useSim.setState({
     tick,
     simTimeMinutes,
@@ -556,6 +574,7 @@ function stepTick() {
     metrics,
     recommendations: mergedRecs,
     dismissedRecs: nextDismissed,
+    dayEnded,
   });
 }
 
