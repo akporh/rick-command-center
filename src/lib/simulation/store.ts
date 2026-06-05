@@ -194,6 +194,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
     }
     set((cur) => ({
       recommendations: cur.recommendations.filter((x) => x.id !== id),
+      dismissedRecs: cur.dismissedRecs.includes(id) ? cur.dismissedRecs : [...cur.dismissedRecs, id],
       metrics: {
         ...cur.metrics,
         aiAcceptedCount: cur.metrics.aiAcceptedCount + 1,
@@ -209,12 +210,14 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   rejectRecommendation: (id) => {
     set((s) => ({
       recommendations: s.recommendations.filter((x) => x.id !== id),
+      dismissedRecs: s.dismissedRecs.includes(id) ? s.dismissedRecs : [...s.dismissedRecs, id],
       events: pushEvent(s.events, {
         tick: s.tick, kind: "ai_recommendation", severity: "warn",
         message: `Recommendation rejected by dispatcher.`,
       }),
     }));
   },
+
   reassign: (jobId, toEngineerId) => {
     set((s) => {
       const engineers = s.engineers.map((e) => ({
