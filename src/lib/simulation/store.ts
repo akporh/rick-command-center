@@ -131,7 +131,9 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       jobs: seedJobs(14, makeRng(seed + 2)),
       traffic: [],
       recommendations: [],
+      dismissedRecs: [],
       events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
+
       metrics: {
         slaHealth: 100, completed: 0, breached: 0, revenueProtected: 0,
         travelSavedMin: 0, aiAcceptedCount: 0, manualBaselineSla: 84,
