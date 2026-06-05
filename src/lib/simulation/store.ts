@@ -136,6 +136,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       traffic: [],
       recommendations: [],
       dismissedRecs: [],
+      dayEnded: false,
       events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
 
       metrics: {
