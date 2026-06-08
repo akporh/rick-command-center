@@ -57,7 +57,7 @@ function pathTrafficMult(a: { x: number; y: number }, b: { x: number; y: number 
 }
 
 // Minutes until an engineer is free to start a brand-new job (current travel + work + queued backlog).
-function engineerAvailableMin(e: Engineer, jobs: Job[], traffic: TrafficZone[]): number {
+export function engineerAvailableMin(e: Engineer, jobs: Job[], traffic: TrafficZone[]): number {
   let mins = 0;
   if (e.status === "delayed") mins += 6; // assume short delay buffer
   if (e.status === "en_route" && e.destination) {
