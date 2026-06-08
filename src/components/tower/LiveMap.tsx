@@ -76,29 +76,39 @@ export function LiveMap({ height = 560 }: { height?: number }) {
         ))}
 
         {/* traffic zones */}
-        {traffic.map((z) => (
-          <g key={z.id}>
-            <circle cx={z.cx} cy={z.cy} r={z.r} fill="url(#trafficGrad)" />
-            <circle cx={z.cx} cy={z.cy} r={z.r} fill="none" stroke="oklch(0.66 0.25 25 / 0.6)" strokeWidth="1" strokeDasharray="3 4" />
-            <text x={z.cx} y={z.cy + 4} textAnchor="middle" fontSize="10" fontFamily="JetBrains Mono" fill="oklch(0.85 0.15 25)">
-              ×{z.multiplier.toFixed(1)}
-            </text>
-          </g>
-        ))}
+        {traffic.map((z) => {
+          const ticksLeft = Math.max(0, z.expiresAtTick - tick);
+          const clearsAtMin = simTimeMinutes + ticksLeft * 3;
+          return (
+            <g key={z.id}>
+              <title>{`Traffic congestion · ×${z.multiplier.toFixed(1)} travel time · clears ${fmtTime(clearsAtMin)}`}</title>
+              <circle cx={z.cx} cy={z.cy} r={z.r} fill="url(#trafficGrad)" />
+              <circle cx={z.cx} cy={z.cy} r={z.r} fill="none" stroke="oklch(0.66 0.25 25 / 0.6)" strokeWidth="1" strokeDasharray="3 4" />
+              <text x={z.cx} y={z.cy + 4} textAnchor="middle" fontSize="10" fontFamily="JetBrains Mono" fill="oklch(0.85 0.15 25)">
+                ×{z.multiplier.toFixed(1)}
+              </text>
+            </g>
+          );
+        })}
 
-        {/* engineer routes */}
-        {engineers.filter((e) => e.destination).map((e) => (
-          <line
-            key={`r-${e.id}`}
-            x1={e.location.x}
-            y1={e.location.y}
-            x2={e.destination!.x}
-            y2={e.destination!.y}
-            stroke="oklch(0.78 0.16 195 / 0.5)"
-            strokeWidth="1.2"
-            strokeDasharray="4 4"
-          />
-        ))}
+        {/* engineer routes — warm tint when the path crosses a traffic zone */}
+        {engineers.filter((e) => e.destination).map((e) => {
+          const dst = e.destination!;
+          const crossesZone = traffic.some((z) => segmentIntersectsCircle(e.location, dst, z.cx, z.cy, z.r));
+          const stroke = crossesZone ? "oklch(0.78 0.18 45 / 0.7)" : "oklch(0.78 0.16 195 / 0.5)";
+          return (
+            <line
+              key={`r-${e.id}`}
+              x1={e.location.x}
+              y1={e.location.y}
+              x2={dst.x}
+              y2={dst.y}
+              stroke={stroke}
+              strokeWidth={crossesZone ? 1.6 : 1.2}
+              strokeDasharray="4 4"
+            />
+          );
+        })}
 
         {/* jobs */}
         {jobs.filter((j) => j.status !== "completed").map((j) => {
