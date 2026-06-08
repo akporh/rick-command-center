@@ -158,6 +158,12 @@ export function LiveMap({ height = 560 }: { height?: number }) {
         <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-status-info" /> En route</div>
         <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-status-crit" /> Delayed</div>
         <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-status-idle" /> Idle</div>
+        <div className="flex items-center gap-2 pt-1 mt-1 border-t border-panel-border">
+          <span className="w-2 h-2 rounded-full" style={{ background: "oklch(0.66 0.25 25)" }} /> Traffic zone · ×N slower
+        </div>
+        <div className="text-muted-foreground text-[9px] normal-case tracking-normal max-w-[180px] leading-tight">
+          Red circles = live traffic. Routes crossing them turn amber. Hover a zone for details.
+        </div>
       </div>
       <div className="absolute top-3 left-3 panel rounded px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
         Live Map · {engineers.length} engineers · {jobs.filter(j => j.status !== "completed").length} active jobs
