@@ -2,7 +2,7 @@ import { useSim } from "@/lib/simulation/store";
 import { riskBand, priorityColor } from "@/lib/simulation/format";
 
 export function JobRiskPanel() {
-  const { jobs, tick, selectJob, selectedJob } = useSim();
+  const { jobs, tick, selectJob, selectedJob, systemMode } = useSim();
   const active = jobs
     .filter((j) => j.status !== "completed" && j.status !== "breached")
     .sort((a, b) => b.riskScore - a.riskScore);
