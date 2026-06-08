@@ -42,6 +42,58 @@ function trafficMultAt(x: number, y: number, zones: TrafficZone[]) {
   return m;
 }
 
+// Average traffic multiplier sampled along a straight path between two points.
+function pathTrafficMult(a: { x: number; y: number }, b: { x: number; y: number }, zones: TrafficZone[]) {
+  if (zones.length === 0) return 1;
+  const samples = 8;
+  let sum = 0;
+  for (let i = 1; i <= samples; i++) {
+    const t = i / (samples + 1);
+    const x = a.x + (b.x - a.x) * t;
+    const y = a.y + (b.y - a.y) * t;
+    sum += trafficMultAt(x, y, zones);
+  }
+  return sum / samples;
+}
+
+// Minutes until an engineer is free to start a brand-new job (current travel + work + queued backlog).
+function engineerAvailableMin(e: Engineer, jobs: Job[], traffic: TrafficZone[]): number {
+  let mins = 0;
+  if (e.delayUntil) mins += Math.max(0, (e.delayUntil - 0) * 0) ; // placeholder, see below
+  if (e.status === "en_route" && e.destination) {
+    const tm = pathTrafficMult(e.location, e.destination, traffic);
+    const d = dist(e.location, e.destination);
+    mins += (d / (32 * e.speedFactor)) * SIM_MINUTES_PER_TICK * tm;
+  }
+  if (e.currentJob) {
+    const cj = jobs.find((j) => j.id === e.currentJob);
+    if (cj) mins += (1 - cj.progress / 100) * cj.durationBase / Math.max(0.4, e.speedFactor);
+  }
+  for (const id of e.nextJobs) {
+    const nj = jobs.find((j) => j.id === id);
+    if (nj) mins += nj.durationBase / Math.max(0.4, e.speedFactor);
+  }
+  return mins;
+}
+
+// Time from engineer's "end of current commitments" location to a new job, accounting for traffic.
+function travelToJobMin(e: Engineer, job: Job, traffic: TrafficZone[], jobs: Job[]): number {
+  // Approximate engineer's end-of-queue location: destination if en_route, last queued job loc, else current loc
+  let from = e.location;
+  if (e.destination) from = e.destination;
+  if (e.nextJobs.length > 0) {
+    const last = jobs.find((j) => j.id === e.nextJobs[e.nextJobs.length - 1]);
+    if (last) from = last.location;
+  } else if (e.currentJob) {
+    const cj = jobs.find((j) => j.id === e.currentJob);
+    if (cj) from = cj.location;
+  }
+  const tm = pathTrafficMult(from, job.location, traffic);
+  const d = dist(from, job.location);
+  return (d / (32 * e.speedFactor)) * SIM_MINUTES_PER_TICK * tm;
+}
+
+
 function pushEvent(events: SimEvent[], e: Omit<SimEvent, "id">): SimEvent[] {
   const next = [{ ...e, id: uid("ev") }, ...events];
   return next.slice(0, 80);
