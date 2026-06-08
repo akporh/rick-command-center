@@ -48,17 +48,26 @@ export function AppShell() {
 
         <div className="ml-auto flex items-center gap-2">
           <div className="flex rounded border border-panel-border overflow-hidden">
-            {(["manual", "copilot", "autopilot"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setSystemMode(m)}
-                className={`px-3 py-1 text-[11px] uppercase tracking-widest font-mono ${
-                  systemMode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
+            {(["manual", "copilot", "autopilot"] as const).map((m) => {
+              const tip =
+                m === "manual"
+                  ? "Manual: you assign every job. AI suggests but never acts."
+                  : m === "copilot"
+                  ? "Copilot: AI auto-assigns new jobs. Reassignments need your approval."
+                  : "Autopilot: AI auto-assigns and auto-accepts safe reassignments (with cooldowns).";
+              return (
+                <button
+                  key={m}
+                  onClick={() => setSystemMode(m)}
+                  title={tip}
+                  className={`px-3 py-1 text-[11px] uppercase tracking-widest font-mono ${
+                    systemMode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {m}
+                </button>
+              );
+            })}
           </div>
           <div className="flex rounded border border-panel-border overflow-hidden">
             {([1, 2, 4, 8] as const).map((s) => (
