@@ -19,6 +19,7 @@ export interface Engineer {
   currentJob: string | null;
   nextJobs: string[];
   delayUntil: number | null;
+  lastAutoActionTick?: number;
 }
 
 export interface Job {
@@ -38,6 +39,7 @@ export interface Job {
   skill: Skill;
   status: JobStatus;
   assignedEngineer: string | null;
+  lastReassignedTick?: number;
 }
 
 export interface TrafficZone {
@@ -104,6 +106,7 @@ export interface SimState {
   dismissedRecs: string[];
   dayEnded: boolean;
   events: SimEvent[];
+  aiAssistedJobs: Record<string, { revenue: number; travel: number }>;
   metrics: {
 
     slaHealth: number;
