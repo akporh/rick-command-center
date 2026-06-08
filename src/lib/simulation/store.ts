@@ -136,6 +136,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   recommendations: [],
   dismissedRecs: [],
   dayEnded: false,
+  aiAssistedJobs: {},
 
   events: [{
     id: uid("ev"),
