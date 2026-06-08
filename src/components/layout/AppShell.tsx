@@ -118,7 +118,7 @@ export function AppShell() {
             <div className="text-[11px] font-mono text-muted-foreground space-y-1">
               <div className="flex justify-between"><span>Revenue saved</span><span className="text-status-ok">£{metrics.revenueProtected.toLocaleString()}</span></div>
               <div className="flex justify-between"><span>Travel saved</span><span className="text-status-info">{metrics.travelSavedMin}m</span></div>
-              <div className="flex justify-between"><span>AI accepted</span><span>{metrics.aiAcceptedCount}</span></div>
+              <div className="flex justify-between"><span>AI actions</span><span>{metrics.aiAcceptedCount}</span></div>
             </div>
           </div>
         </aside>
