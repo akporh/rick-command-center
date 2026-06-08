@@ -57,9 +57,10 @@ export function EngineerPanel() {
                   </div>
                 </div>
               </div>
-              {e.nextJobs.length > 0 && (
-                <div className="text-[9px] font-mono text-muted-foreground mt-1">+{e.nextJobs.length} queued</div>
-              )}
+              <div className="flex items-center justify-between text-[9px] font-mono text-muted-foreground mt-1">
+                <span>Next free in: <span className="text-foreground/80">{availMin > 0 ? `${availMin}m` : "now"}</span></span>
+                {e.nextJobs.length > 0 && <span>+{e.nextJobs.length} queued</span>}
+              </div>
             </button>
           );
         })}
