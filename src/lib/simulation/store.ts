@@ -335,20 +335,22 @@ function stepTick() {
   let traffic = s.traffic.filter((z) => z.expiresAtTick > tick);
   let events = s.events;
 
-  // Auto-assign queued jobs to best idle engineer
-  for (const job of jobs) {
-    if (job.status === "queued") {
-      const candidate = pickBestEngineer(job, engineers);
-      if (candidate) {
-        job.assignedEngineer = candidate.id;
-        if (!candidate.currentJob) {
-          candidate.currentJob = job.id;
-          candidate.destination = job.location;
-          candidate.status = "en_route";
-          job.status = "en_route";
-        } else {
-          candidate.nextJobs.push(job.id);
-          job.status = "assigned";
+  // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned)
+  if (s.systemMode !== "manual") {
+    for (const job of jobs) {
+      if (job.status === "queued") {
+        const candidate = pickBestEngineer(job, engineers, jobs, traffic);
+        if (candidate) {
+          job.assignedEngineer = candidate.id;
+          if (!candidate.currentJob) {
+            candidate.currentJob = job.id;
+            candidate.destination = job.location;
+            candidate.status = "en_route";
+            job.status = "en_route";
+          } else {
+            candidate.nextJobs.push(job.id);
+            job.status = "assigned";
+          }
         }
       }
     }
