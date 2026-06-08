@@ -678,8 +678,10 @@ function stepTick() {
     recommendations: mergedRecs,
     dismissedRecs: nextDismissed,
     dayEnded,
+    aiAssistedJobs,
   });
 }
+
 
 
 function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
