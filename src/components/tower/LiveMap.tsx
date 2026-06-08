@@ -42,7 +42,7 @@ const DISTRICTS = [
 ];
 
 export function LiveMap({ height = 560 }: { height?: number }) {
-  const { engineers, jobs, traffic, selectedEngineer, selectedJob, selectEngineer, selectJob } = useSim();
+  const { engineers, jobs, traffic, selectedEngineer, selectedJob, selectEngineer, selectJob, simTimeMinutes, tick } = useSim();
 
   return (
     <div className="relative w-full h-full overflow-hidden rounded-md border border-panel-border bg-[oklch(0.16_0.025_252)]">
