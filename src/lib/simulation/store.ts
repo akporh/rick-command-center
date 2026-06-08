@@ -422,9 +422,18 @@ function stepTick() {
             } else {
               eng.status = "idle";
             }
+            // Credit AI metrics ONLY when an AI-assisted job actually completes on time
+            const credit = aiAssistedJobs[job.id];
+            let creditNote = "";
+            if (credit) {
+              metricsDelta.revenueProtected += credit.revenue;
+              metricsDelta.travelSavedMin += credit.travel;
+              delete aiAssistedJobs[job.id];
+              creditNote = ` · AI-assisted: +£${credit.revenue} protected`;
+            }
             events = pushEvent(events, {
               tick, kind: "job_completed", severity: "ok",
-              message: `${job.id} completed at ${job.customer} — £${job.revenue} secured`,
+              message: `${job.id} completed at ${job.customer} — £${job.revenue} secured${creditNote}`,
             });
           }
         }
