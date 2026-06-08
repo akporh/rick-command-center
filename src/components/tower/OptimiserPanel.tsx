@@ -16,9 +16,13 @@ export function OptimiserPanel() {
         </button>
       </div>
       <div className="flex-1 overflow-auto p-2 space-y-2">
-        {systemMode === "autopilot" && (
+        {systemMode === "autopilot" ? (
           <div className="text-[10px] font-mono uppercase tracking-widest p-2 rounded border border-primary/30 bg-primary/5 text-primary">
-            AUTOPILOT ACTIVE · Top recommendations auto-executed
+            AUTOPILOT · Auto-executing safe actions (max 1/tick, with cooldowns)
+          </div>
+        ) : (
+          <div className="text-[10px] font-mono uppercase tracking-widest p-2 rounded border border-panel-border bg-background/40 text-muted-foreground">
+            {systemMode === "manual" ? "MANUAL · " : "COPILOT · "}Approval required for every action
           </div>
         )}
         <AnimatePresence initial={false}>

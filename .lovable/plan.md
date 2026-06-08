@@ -1,63 +1,81 @@
+# Plan: Mode behaviour, smarter dispatch, honest metrics, map clarity
 
-## What's actually going wrong
+## 1. Make the three modes actually different
 
-After reading `src/lib/simulation/store.ts` and `src/lib/simulation/seed.ts`, there are four compounding bugs that produce the 5pm chaos you saw:
+Gate dispatch behaviour in `stepTick` on `systemMode`:
 
-1. **No end-of-day.** `tick` and `simTimeMinutes` increment forever. The shift clock never stops at 17:00, so jobs keep being injected at 22:00, 02:00, etc.
-2. **Unbounded job injection.** Every tick has a 20% chance of a new booking and a 2.5% chance of an emergency — for the full uncapped runtime. Over a 9-hour shift that's ~36 extra jobs on top of the 14 starters, well above what 8 engineers can clear (≈1 job / 30 min each ≈ 9 jobs / day max).
-3. **No backlog cap in dispatch.** `pickBestEngineer` always returns *some* engineer, even one already holding 8 queued jobs — the load penalty (-25 per job) is easily beaten by skill match (+100) or distance. So the same 2–3 best-matched engineers get stacked while others stay lighter.
-4. **Queued jobs accrue SLA risk while they wait.** Engineers only work `currentJob`; everything in `nextJobs` sits with its SLA clock ticking. That's why the UI looks like "engineers aren't doing their assigned work" — they *are* working, just on one job at a time, while 5–8 others queued behind them turn red.
+- **Manual** — no auto-dispatch. New `queued` jobs stay unassigned until the dispatcher accepts a recommendation or assigns by hand. AI still generates recommendations.
+- **Copilot** — auto-dispatch *initial* assignment only (a `queued` job with no engineer gets routed to the best-scoring engineer). Any **reassignment** of an already-assigned job requires the dispatcher to accept a recommendation.
+- **Autopilot** — Copilot behaviour + auto-accept top recommendations, subject to guardrails (below).
 
-There's also no AI behaviour that *rebalances* an overloaded engineer's tail onto idle engineers — the optimiser only reassigns by skill/distance gain, so a 9-deep queue never triggers a redistribution.
+## 2. Autopilot guardrails (stop the reassignment thrash)
 
-## Plan
+- Never reassign a job that is `in_progress` or already `en_route` with >50% travel done.
+- Add `lastReassignedTick` to `Job`; cooldown of >=18 sim-min before the same job can be reassigned again.
+- Per-engineer cooldown: an engineer can be the *source* or *target* of at most one auto-reassign every 3 ticks.
+- Cap auto-accepts to **1 per tick**, and only if `slaImprovement >= 15` or `riskScore >= 70`.
+- Rebalance recs skip any job that's already moving.
 
-### 1. Operating day window (08:00 → 17:00)
+## 3. Smarter dispatch scoring (applies to all modes)
 
-- Define `DAY_START_MIN = 0` (08:00) and `DAY_END_MIN = 540` (17:00) constants.
-- In `stepTick`, once `simTimeMinutes >= DAY_END_MIN`:
-  - Stop all new job injection (regular + emergency + scripted).
-  - Allow in-flight work to keep progressing for a wind-down window (≈30 sim-min) so engineers complete what they can.
-  - Once `simTimeMinutes >= DAY_END_MIN + 30` (17:30), call `stop()` and push an `end_of_day` event summarising completed / breached / revenue protected / AI accepted. Set a new `dayEnded: true` flag in `SimState`.
-- `reset()` clears `dayEnded` and returns to 08:00.
-- Add a small "EOD" badge in the header/clock when `dayEnded` is true (single change in `GlobalActions` or wherever the sim clock lives — I'll locate it during implementation).
+Replace raw-distance scoring in `pickBestEngineer` with a "soonest available" ETA:
 
-### 2. Cap engineer queues so overflow stays queued (visible pressure, not invisible pileup)
+```
+engineerAvailableInMin =
+    remainingTravelToCurrentDest
+  + remainingWorkOnCurrentJob
+  + sum(durationBase / speedFactor for j in nextJobs)
 
-- In `pickBestEngineer`, treat any engineer with `currentJob + nextJobs.length >= MAX_QUEUE` (e.g. 3) as ineligible.
-- If no engineer is eligible, the job stays `queued` — it shows up in the Job Risk panel as unassigned backlog instead of being silently buried in someone's `nextJobs`.
-- Same cap applies in the autopilot auto-reassign path and in `computeRecommendations` so the AI doesn't pile onto an already-full engineer.
+travelToNewJobMin = distance(engineer.lastKnownEnd, job.location)
+                    / (32 * speedFactor)
+                    * trafficMultiplierAlongPath   // NEW
 
-### 3. Adaptive job injection (back-pressure)
+jobDurationMin    = job.durationBase / speedFactor
+                    * (1.0 if skillMatch else 1.25)
 
-- Compute current load = open jobs / (engineers × MAX_QUEUE).
-- Scale the 0.2 / 0.025 injection chances by `max(0, 1 - load)` so when the system is saturated, almost no new jobs spawn. Stress mode keeps a higher floor.
-- Hard-stop injection past `DAY_END_MIN` (per #1).
+score = -(engineerAvailableInMin + travelToNewJobMin)
+      + skillBonus
+      - queuePenalty (existing MAX_QUEUE cap stays)
+      - fatiguePenalty
+```
 
-### 4. AI rebalance recommendations for overloaded engineers
+`trafficMultiplierAlongPath` samples the existing `traffic` zones on the line between engineer and job — if the path passes through a zone, multiply that segment by the zone's `multiplier`. Same helper is reused by `computeRecommendations` so reasoning text can say things like:
 
-Add a second pass in `computeRecommendations`:
+> *"Hugo can start in 8 min (clear route) vs Aria in 34 min (×1.8 traffic on Central). Cuts SLA risk 42%."*
 
-- Find engineers whose queue depth exceeds the fleet median by 2+.
-- For each such engineer's *last* queued job, find the lightest-loaded eligible engineer and emit a `reassign` recommendation with reasoning like *"Rebalance: move J123 from Aria (queue 6) → Hugo (queue 1) to recover 38 min slack."*
-- Cap total recommendations at 5 as today.
+## 4. Honest metrics
 
-### 5. Small UX surfacing
+- `revenueProtected` only increments when a job that was the target of an accepted AI action **actually completes on time**. Track via `aiAssistedJobs: string[]` on `SimState`.
+- Rename header counter from "AI accepted" to "AI actions" so accepted-but-undone work doesn't read as a win.
+- `travelSavedMin` only credits when the reassigned job completes (same rule).
 
-- In `JobRiskPanel`, show queued-unassigned jobs with a distinct "UNASSIGNED — no capacity" tag so the dispatcher sees overflow rather than wondering why a job is high-risk with no engineer.
-- In the sim clock area, show `HH:MM` (already there) plus an `EOD` pill once the day ends.
+## 5. UX surfacing
 
-## Files I expect to touch
+- **Header mode buttons** — tooltips:
+  - Manual: *"You assign every job. AI suggests but never acts."*
+  - Copilot: *"AI auto-assigns new jobs. Reassignments need your approval."*
+  - Autopilot: *"AI auto-assigns and auto-accepts safe reassignments. Critical actions still queue for approval."*
+- **OptimiserPanel** — show "Approval required" pill in Copilot/Manual, "Auto-executing" pill in Autopilot.
+- **JobRiskPanel** — "Awaiting dispatch" tag for `queued` jobs with no engineer (Manual mode will produce many).
+- **EngineerPanel** — show each engineer's "Next available in: Xm" so dispatchers can sanity-check why the AI picked who it picked.
+- **LiveMap traffic zones** — add a tooltip / legend entry explaining the red circles:
+  - Add a legend row: *"Red zone · live traffic · ×N = travel time multiplier"*
+  - On hover over a zone, show `Traffic congestion · ×1.8 travel time · clears at 14:32`.
+  - Engineer route lines that cross a zone render in a warmer colour so it's visible at a glance.
 
-- `src/lib/simulation/store.ts` — day window, EOD stop, capped dispatcher, adaptive injection, rebalance recommendations.
-- `src/lib/simulation/types.ts` — add `dayEnded: boolean`.
-- `src/components/tower/JobRiskPanel.tsx` — small "unassigned" tag.
-- Wherever the sim clock renders (likely `AppShell` / `GlobalActions`) — add EOD pill. I'll confirm the exact file when implementing.
+## Files to touch
 
-## What you'll see after the fix
+- `src/lib/simulation/store.ts` — mode-gated dispatch, autopilot guardrails, cooldowns, ETA/traffic-aware scoring, deferred revenue credit.
+- `src/lib/simulation/types.ts` — `lastReassignedTick` on `Job`, `aiAssistedJobs: string[]` on `SimState`.
+- `src/components/layout/AppShell.tsx` — mode tooltips, rename "AI accepted" → "AI actions".
+- `src/components/tower/OptimiserPanel.tsx` — Approval / Auto-executing pills.
+- `src/components/tower/JobRiskPanel.tsx` — "Awaiting dispatch" tag.
+- `src/components/tower/EngineerPanel.tsx` — "Next available in" line.
+- `src/components/tower/LiveMap.tsx` — zone hover tooltip, expanded legend, warm-tint route lines through zones.
 
-- The clock advances 08:00 → 17:00, then a single `End of Day` event fires and the simulation pauses on its own.
-- No engineer holds more than ~3 jobs at once; surplus stays visibly queued in the Job Risk panel.
-- New-job spawning slows when the queue is already full and stops entirely after 17:00.
-- The AI starts proposing *rebalance* reassignments (not just skill/distance swaps), so overloaded engineers get drained automatically in copilot/autopilot.
-- 5pm should look busy but coherent — high-risk jobs are either assigned to someone actively moving on them or flagged as unassigned-overflow, not silently stacked behind one engineer.
+## What you should see after the changes
+
+- Switching to **Manual** leaves new jobs visibly unassigned until you act — clear behavioural difference.
+- **Copilot** auto-routes new jobs but never yanks one mid-flight; the recommendations queue is where reassignments live.
+- **Autopilot** at 5pm looks busy but coherent — at most a handful of auto-reassigns per minute, no job ping-ponging between engineers, `revenueProtected` only ticks up when jobs actually land on time.
+- Hovering a red circle on the map explains it's a traffic zone and what the multiplier means; the optimiser's reasoning text references those zones when they affect routing.

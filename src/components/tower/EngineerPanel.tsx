@@ -1,5 +1,6 @@
-import { useSim } from "@/lib/simulation/store";
+import { useSim, engineerAvailableMin } from "@/lib/simulation/store";
 import { statusLabel } from "@/lib/simulation/format";
+
 
 const statusColor: Record<string, string> = {
   working: "bg-status-ok",
@@ -9,7 +10,7 @@ const statusColor: Record<string, string> = {
 };
 
 export function EngineerPanel() {
-  const { engineers, jobs, selectEngineer, selectedEngineer } = useSim();
+  const { engineers, jobs, traffic, selectEngineer, selectedEngineer } = useSim();
 
   return (
     <div className="panel rounded-md flex flex-col h-full overflow-hidden">
@@ -21,6 +22,7 @@ export function EngineerPanel() {
         {engineers.map((e) => {
           const cur = jobs.find((j) => j.id === e.currentJob);
           const selected = selectedEngineer === e.id;
+          const availMin = Math.round(engineerAvailableMin(e, jobs, traffic));
           return (
             <button
               key={e.id}
@@ -55,9 +57,10 @@ export function EngineerPanel() {
                   </div>
                 </div>
               </div>
-              {e.nextJobs.length > 0 && (
-                <div className="text-[9px] font-mono text-muted-foreground mt-1">+{e.nextJobs.length} queued</div>
-              )}
+              <div className="flex items-center justify-between text-[9px] font-mono text-muted-foreground mt-1">
+                <span>Next free in: <span className="text-foreground/80">{availMin > 0 ? `${availMin}m` : "now"}</span></span>
+                {e.nextJobs.length > 0 && <span>+{e.nextJobs.length} queued</span>}
+              </div>
             </button>
           );
         })}

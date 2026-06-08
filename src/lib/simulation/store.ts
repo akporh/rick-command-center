@@ -42,6 +42,58 @@ function trafficMultAt(x: number, y: number, zones: TrafficZone[]) {
   return m;
 }
 
+// Average traffic multiplier sampled along a straight path between two points.
+function pathTrafficMult(a: { x: number; y: number }, b: { x: number; y: number }, zones: TrafficZone[]) {
+  if (zones.length === 0) return 1;
+  const samples = 8;
+  let sum = 0;
+  for (let i = 1; i <= samples; i++) {
+    const t = i / (samples + 1);
+    const x = a.x + (b.x - a.x) * t;
+    const y = a.y + (b.y - a.y) * t;
+    sum += trafficMultAt(x, y, zones);
+  }
+  return sum / samples;
+}
+
+// Minutes until an engineer is free to start a brand-new job (current travel + work + queued backlog).
+export function engineerAvailableMin(e: Engineer, jobs: Job[], traffic: TrafficZone[]): number {
+  let mins = 0;
+  if (e.status === "delayed") mins += 6; // assume short delay buffer
+  if (e.status === "en_route" && e.destination) {
+    const tm = pathTrafficMult(e.location, e.destination, traffic);
+    const d = dist(e.location, e.destination);
+    mins += (d / (32 * e.speedFactor)) * SIM_MINUTES_PER_TICK * tm;
+  }
+  if (e.currentJob) {
+    const cj = jobs.find((j) => j.id === e.currentJob);
+    if (cj) mins += (1 - cj.progress / 100) * cj.durationBase / Math.max(0.4, e.speedFactor);
+  }
+  for (const id of e.nextJobs) {
+    const nj = jobs.find((j) => j.id === id);
+    if (nj) mins += nj.durationBase / Math.max(0.4, e.speedFactor);
+  }
+  return mins;
+}
+
+// Time from engineer's "end of current commitments" location to a new job, accounting for traffic.
+function travelToJobMin(e: Engineer, job: Job, traffic: TrafficZone[], jobs: Job[]): number {
+  // Approximate engineer's end-of-queue location: destination if en_route, last queued job loc, else current loc
+  let from = e.location;
+  if (e.destination) from = e.destination;
+  if (e.nextJobs.length > 0) {
+    const last = jobs.find((j) => j.id === e.nextJobs[e.nextJobs.length - 1]);
+    if (last) from = last.location;
+  } else if (e.currentJob) {
+    const cj = jobs.find((j) => j.id === e.currentJob);
+    if (cj) from = cj.location;
+  }
+  const tm = pathTrafficMult(from, job.location, traffic);
+  const d = dist(from, job.location);
+  return (d / (32 * e.speedFactor)) * SIM_MINUTES_PER_TICK * tm;
+}
+
+
 function pushEvent(events: SimEvent[], e: Omit<SimEvent, "id">): SimEvent[] {
   const next = [{ ...e, id: uid("ev") }, ...events];
   return next.slice(0, 80);
@@ -84,6 +136,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   recommendations: [],
   dismissedRecs: [],
   dayEnded: false,
+  aiAssistedJobs: {},
 
   events: [{
     id: uid("ev"),
@@ -137,6 +190,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       recommendations: [],
       dismissedRecs: [],
       dayEnded: false,
+      aiAssistedJobs: {},
       events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
 
       metrics: {
@@ -199,20 +253,25 @@ export const useSim = create<SimState & Actions>((set, get) => ({
     if (r.type === "reassign" && r.toEngineer) {
       get().reassign(r.jobId, r.toEngineer);
     }
-    set((cur) => ({
-      recommendations: cur.recommendations.filter((x) => x.id !== id),
-      dismissedRecs: cur.dismissedRecs.includes(id) ? cur.dismissedRecs : [...cur.dismissedRecs, id],
-      metrics: {
-        ...cur.metrics,
-        aiAcceptedCount: cur.metrics.aiAcceptedCount + 1,
-        revenueProtected: cur.metrics.revenueProtected + r.revenueProtected,
-        travelSavedMin: cur.metrics.travelSavedMin + r.travelReductionMin,
-      },
-      events: pushEvent(cur.events, {
-        tick: cur.tick, kind: "reassigned", severity: "ok",
-        message: `AI action accepted: ${r.reasoning}`,
-      }),
-    }));
+    set((cur) => {
+      const prior = cur.aiAssistedJobs[r.jobId] ?? { revenue: 0, travel: 0 };
+      return {
+        recommendations: cur.recommendations.filter((x) => x.id !== id),
+        dismissedRecs: cur.dismissedRecs.includes(id) ? cur.dismissedRecs : [...cur.dismissedRecs, id],
+        aiAssistedJobs: {
+          ...cur.aiAssistedJobs,
+          [r.jobId]: { revenue: prior.revenue + r.revenueProtected, travel: prior.travel + r.travelReductionMin },
+        },
+        metrics: {
+          ...cur.metrics,
+          aiAcceptedCount: cur.metrics.aiAcceptedCount + 1,
+        },
+        events: pushEvent(cur.events, {
+          tick: cur.tick, kind: "reassigned", severity: "ok",
+          message: `AI action accepted: ${r.reasoning}`,
+        }),
+      };
+    });
   },
   rejectRecommendation: (id) => {
     set((s) => ({
@@ -243,7 +302,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       }
       const jobs: Job[] = s.jobs.map((j) =>
         j.id === jobId
-          ? { ...j, assignedEngineer: toEngineerId, status: (to?.currentJob === jobId ? "en_route" : "assigned") as Job["status"] }
+          ? { ...j, assignedEngineer: toEngineerId, status: (to?.currentJob === jobId ? "en_route" : "assigned") as Job["status"], lastReassignedTick: s.tick }
           : j
       );
       return { engineers, jobs };
@@ -275,21 +334,27 @@ function stepTick() {
   let jobs = s.jobs.map((j) => ({ ...j }));
   let traffic = s.traffic.filter((z) => z.expiresAtTick > tick);
   let events = s.events;
+  let aiAssistedJobs = { ...s.aiAssistedJobs };
+  // running deltas to apply to metrics this tick
+  let metricsDelta = { revenueProtected: 0, travelSavedMin: 0, aiAcceptedCount: 0 };
 
-  // Auto-assign queued jobs to best idle engineer
-  for (const job of jobs) {
-    if (job.status === "queued") {
-      const candidate = pickBestEngineer(job, engineers);
-      if (candidate) {
-        job.assignedEngineer = candidate.id;
-        if (!candidate.currentJob) {
-          candidate.currentJob = job.id;
-          candidate.destination = job.location;
-          candidate.status = "en_route";
-          job.status = "en_route";
-        } else {
-          candidate.nextJobs.push(job.id);
-          job.status = "assigned";
+
+  // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned)
+  if (s.systemMode !== "manual") {
+    for (const job of jobs) {
+      if (job.status === "queued") {
+        const candidate = pickBestEngineer(job, engineers, jobs, traffic);
+        if (candidate) {
+          job.assignedEngineer = candidate.id;
+          if (!candidate.currentJob) {
+            candidate.currentJob = job.id;
+            candidate.destination = job.location;
+            candidate.status = "en_route";
+            job.status = "en_route";
+          } else {
+            candidate.nextJobs.push(job.id);
+            job.status = "assigned";
+          }
         }
       }
     }
@@ -357,9 +422,18 @@ function stepTick() {
             } else {
               eng.status = "idle";
             }
+            // Credit AI metrics ONLY when an AI-assisted job actually completes on time
+            const credit = aiAssistedJobs[job.id];
+            let creditNote = "";
+            if (credit) {
+              metricsDelta.revenueProtected += credit.revenue;
+              metricsDelta.travelSavedMin += credit.travel;
+              delete aiAssistedJobs[job.id];
+              creditNote = ` · AI-assisted: +£${credit.revenue} protected`;
+            }
             events = pushEvent(events, {
               tick, kind: "job_completed", severity: "ok",
-              message: `${job.id} completed at ${job.customer} — £${job.revenue} secured`,
+              message: `${job.id} completed at ${job.customer} — £${job.revenue} secured${creditNote}`,
             });
           }
         }
@@ -389,6 +463,8 @@ function stepTick() {
 
       if (remaining <= 0 && job.progress < 100) {
         job.status = "breached";
+        // drop any pending AI credit — the action didn't save it
+        if (aiAssistedJobs[job.id]) delete aiAssistedJobs[job.id];
         events = pushEvent(events, {
           tick, kind: "sla_breach", severity: "crit",
           message: `SLA BREACH on ${job.id} (${job.customer}) — £${job.penalty} exposure`,
@@ -491,51 +567,78 @@ function stepTick() {
     slaHealth,
     completed,
     breached,
+    revenueProtected: s.metrics.revenueProtected + metricsDelta.revenueProtected,
+    travelSavedMin: s.metrics.travelSavedMin + metricsDelta.travelSavedMin,
+    aiAcceptedCount: s.metrics.aiAcceptedCount + metricsDelta.aiAcceptedCount,
   };
 
   // Prune dismissed IDs for jobs that no longer exist / are closed
   const dismissedRecs = pruneDismissed(s.dismissedRecs, jobs);
 
   // Generate recommendations
-  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations, dismissedRecs };
+  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations, dismissedRecs, aiAssistedJobs };
   const fresh = computeRecommendations(state);
 
-  // Autopilot auto-accept top recs (and dismiss them so they don't reappear)
+  // Autopilot auto-accept — with guardrails to stop reassignment thrash:
+  //  - Skip jobs currently in_progress or recently reassigned (cooldown 18 sim-min = 6 ticks)
+  //  - Skip engineers that took an auto action in last 3 ticks (source or target)
+  //  - Cap to 1 auto-accept per tick
+  //  - Only accept high-confidence: slaImprovement >= 15 OR riskScore >= 70
   const autoDismissed: string[] = [];
   let actionable = fresh;
   if (s.systemMode === "autopilot" && fresh.length > 0) {
-    const top = fresh.slice(0, 2);
-    for (const r of top) {
-      if (r.type === "reassign" && r.toEngineer) {
-        // perform reassignment immediately
-        const to = engineers.find((e) => e.id === r.toEngineer);
-        const job = jobs.find((j) => j.id === r.jobId);
-        if (to && job) {
-          // unassign from previous
-          for (const e of engineers) {
-            if (e.currentJob === job.id) { e.currentJob = null; e.status = "idle"; }
-            e.nextJobs = e.nextJobs.filter((x) => x !== job.id);
-          }
-          if (!to.currentJob) {
-            to.currentJob = job.id;
-            to.destination = job.location;
-            to.status = "en_route";
-            job.status = "en_route";
-          } else {
-            to.nextJobs.push(job.id);
-            job.status = "assigned";
-          }
-          job.assignedEngineer = to.id;
-          metrics.aiAcceptedCount += 1;
-          metrics.revenueProtected += r.revenueProtected;
-          metrics.travelSavedMin += r.travelReductionMin;
-          autoDismissed.push(r.id);
-          events = pushEvent(events, {
-            tick, kind: "reassigned", severity: "ok",
-            message: `[AUTOPILOT] ${r.reasoning}`,
-          });
+    const JOB_COOLDOWN_TICKS = 6;
+    const ENG_COOLDOWN_TICKS = 3;
+    for (const r of fresh) {
+      if (autoDismissed.length >= 1) break; // 1 per tick
+      if (r.type !== "reassign" || !r.toEngineer) continue;
+      const job = jobs.find((j) => j.id === r.jobId);
+      const to = engineers.find((e) => e.id === r.toEngineer);
+      const from = r.fromEngineer ? engineers.find((e) => e.id === r.fromEngineer) : undefined;
+      if (!job || !to) continue;
+      // Guardrails
+      if (job.status === "in_progress") continue;
+      if (job.status === "en_route") {
+        // skip if we're already well into the trip
+        const eng = engineers.find((e) => e.id === job.assignedEngineer);
+        if (eng && eng.destination) {
+          const total = dist(eng.location, eng.destination) + 0.0001;
+          // can't easily know start, so use simple guard: if eng is near destination, skip
+          if (total < 80) continue;
         }
       }
+      if (job.lastReassignedTick !== undefined && tick - job.lastReassignedTick < JOB_COOLDOWN_TICKS) continue;
+      if (to.lastAutoActionTick !== undefined && tick - to.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
+      if (from && from.lastAutoActionTick !== undefined && tick - from.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
+      if (!(r.slaImprovement >= 15 || job.riskScore >= 70)) continue;
+
+      // Perform reassignment
+      for (const e of engineers) {
+        if (e.currentJob === job.id) { e.currentJob = null; e.status = "idle"; }
+        e.nextJobs = e.nextJobs.filter((x) => x !== job.id);
+      }
+      if (!to.currentJob) {
+        to.currentJob = job.id;
+        to.destination = job.location;
+        to.status = "en_route";
+        job.status = "en_route";
+      } else {
+        to.nextJobs.push(job.id);
+        job.status = "assigned";
+      }
+      job.assignedEngineer = to.id;
+      job.lastReassignedTick = tick;
+      to.lastAutoActionTick = tick;
+      if (from) from.lastAutoActionTick = tick;
+      // Track for deferred revenue credit on actual completion
+      const prior = aiAssistedJobs[job.id] ?? { revenue: 0, travel: 0 };
+      aiAssistedJobs[job.id] = { revenue: prior.revenue + r.revenueProtected, travel: prior.travel + r.travelReductionMin };
+      metrics.aiAcceptedCount += 1;
+      autoDismissed.push(r.id);
+      events = pushEvent(events, {
+        tick, kind: "reassigned", severity: "ok",
+        message: `[AUTOPILOT] ${r.reasoning}`,
+      });
     }
     actionable = fresh.filter((r) => !autoDismissed.includes(r.id));
   }
@@ -575,12 +678,15 @@ function stepTick() {
     recommendations: mergedRecs,
     dismissedRecs: nextDismissed,
     dayEnded,
+    aiAssistedJobs,
   });
 }
 
 
-function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
-  // score by skill match + distance + load; respect MAX_QUEUE
+
+// "Soonest available" scoring: pick the engineer who can actually start (and finish) this job
+// the earliest, accounting for queue depth, current trip, traffic on the route, and skill match.
+export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]): Engineer | null {
   let best: Engineer | null = null;
   let bestScore = -Infinity;
   for (const e of engineers) {
@@ -588,12 +694,16 @@ function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
     const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
     if (load >= MAX_QUEUE) continue;
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
-    const d = dist(e.location, job.location);
-    const score = skillMatch * 100 - d * 0.1 - load * 35 + e.efficiency * 0.2 - e.fatigue * 0.1;
+    const avail = engineerAvailableMin(e, jobs, traffic);
+    const travel = travelToJobMin(e, job, traffic, jobs);
+    const totalMin = avail + travel + (job.durationBase / Math.max(0.4, e.speedFactor)) * (skillMatch === 1 ? 1 : 1.25);
+    // negate so lower minutes = higher score, plus quality bonuses
+    const score = -totalMin + (skillMatch === 1 ? 25 : 0) + e.efficiency * 0.15 - e.fatigue * 0.08;
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
 }
+
 
 function computeRecommendations(s: SimState): AIRecommendation[] {
   const recs: AIRecommendation[] = [];
@@ -605,35 +715,52 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
 
   for (const job of sorted) {
     if (job.riskScore < 40) continue;
+    // Don't propose reassignments on jobs already in execution — too disruptive
+    if (job.status === "in_progress") continue;
     const currentEng = s.engineers.find((e) => e.id === job.assignedEngineer);
+    // Current engineer's ETA to finish this job
+    const curEta = currentEng
+      ? engineerAvailableMin(currentEng, s.jobs, s.traffic) +
+        (currentEng.currentJob === job.id
+          ? 0
+          : travelToJobMin(currentEng, job, s.traffic, s.jobs))
+      : 999;
+
     let bestCandidate: Engineer | null = null;
-    let bestGain = 0;
+    let bestCandEta = curEta;
+    let bestTrafficMult = 1;
     for (const e of s.engineers) {
       if (e.id === job.assignedEngineer) continue;
       if (e.status === "delayed") continue;
       const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
       if (load >= MAX_QUEUE) continue;
       const skillMatch = e.skills.includes(job.skill) ? 1 : 0.5;
-      const d = dist(e.location, job.location);
-      const curD = currentEng ? dist(currentEng.location, job.location) : 1000;
-      const gain = (curD - d) * 0.5 + (skillMatch - 0.7) * 80 - load * 15;
-      if (gain > bestGain) { bestGain = gain; bestCandidate = e; }
+      const avail = engineerAvailableMin(e, s.jobs, s.traffic);
+      const travel = travelToJobMin(e, job, s.traffic, s.jobs);
+      const eta = avail + travel + (skillMatch === 1 ? 0 : 8); // small off-skill penalty
+      if (eta < bestCandEta - 6) { // must beat by at least 6 min
+        bestCandEta = eta;
+        bestCandidate = e;
+        bestTrafficMult = pathTrafficMult(e.location, job.location, s.traffic);
+      }
     }
-    if (bestCandidate && bestGain > 10) {
+    if (bestCandidate) {
       const id = `R-reassign-${job.id}-${bestCandidate.id}`;
       if (dismissed.has(id)) continue;
-      const slaImprovement = Math.min(70, Math.round(bestGain * 0.6 + job.riskScore * 0.2));
-      const travelReductionMin = Math.max(5, Math.round(bestGain * 0.4));
-      const conf = Math.min(98, 55 + Math.round(bestGain / 2));
+      const savedMin = Math.max(5, Math.round(curEta - bestCandEta));
+      const slaImprovement = Math.min(70, Math.round(savedMin * 1.2 + job.riskScore * 0.15));
+      const conf = Math.min(98, 60 + Math.round(savedMin));
+      const startsIn = Math.round(bestCandEta - (bestCandidate.skills.includes(job.skill) ? 0 : 8) - (bestCandEta - engineerAvailableMin(bestCandidate, s.jobs, s.traffic) - travelToJobMin(bestCandidate, job, s.traffic, s.jobs)));
+      const trafficNote = bestTrafficMult > 1.15 ? ` (×${bestTrafficMult.toFixed(1)} traffic en route)` : ` (clear route)`;
       recs.push({
         id,
         type: "reassign",
         jobId: job.id,
         fromEngineer: currentEng?.id,
         toEngineer: bestCandidate.id,
-        reasoning: `Reassign ${job.id} → ${bestCandidate.name.split(" ")[0]} cuts SLA breach risk ${slaImprovement}% and saves ${travelReductionMin} min travel`,
+        reasoning: `${bestCandidate.name.split(" ")[0]} can start in ${Math.max(1, Math.round(bestCandEta))} min${trafficNote} vs ${currentEng ? currentEng.name.split(" ")[0] + " in " + Math.round(curEta) + " min" : "unassigned"}. Cuts SLA risk ${slaImprovement}%, saves ~${savedMin} min.`,
         slaImprovement,
-        travelReductionMin,
+        travelReductionMin: savedMin,
         revenueProtected: Math.round(job.revenue * (slaImprovement / 100)),
         confidence: conf,
         createdAtTick: s.tick,
@@ -664,6 +791,8 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
     const tailJobId = heavy.nextJobs[heavy.nextJobs.length - 1];
     const tailJob = s.jobs.find((j) => j.id === tailJobId);
     if (!tailJob) continue;
+    // Don't move jobs already moving or in execution
+    if (tailJob.status === "in_progress" || tailJob.status === "en_route") continue;
     // pick lightest eligible
     const lightest = sortedLoads.find(
       (l) => l.e.id !== heavy.id && l.load < MAX_QUEUE && l.e.status !== "delayed" && l.load <= median,
