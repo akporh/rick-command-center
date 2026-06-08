@@ -22,6 +22,7 @@ export function EngineerPanel() {
         {engineers.map((e) => {
           const cur = jobs.find((j) => j.id === e.currentJob);
           const selected = selectedEngineer === e.id;
+          const availMin = Math.round(engineerAvailableMin(e, jobs, traffic));
           return (
             <button
               key={e.id}
