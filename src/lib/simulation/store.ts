@@ -791,6 +791,8 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
     const tailJobId = heavy.nextJobs[heavy.nextJobs.length - 1];
     const tailJob = s.jobs.find((j) => j.id === tailJobId);
     if (!tailJob) continue;
+    // Don't move jobs already moving or in execution
+    if (tailJob.status === "in_progress" || tailJob.status === "en_route") continue;
     // pick lightest eligible
     const lightest = sortedLoads.find(
       (l) => l.e.id !== heavy.id && l.load < MAX_QUEUE && l.e.status !== "delayed" && l.load <= median,
