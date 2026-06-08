@@ -10,7 +10,7 @@ const statusColor: Record<string, string> = {
 };
 
 export function EngineerPanel() {
-  const { engineers, jobs, selectEngineer, selectedEngineer } = useSim();
+  const { engineers, jobs, traffic, selectEngineer, selectedEngineer } = useSim();
 
   return (
     <div className="panel rounded-md flex flex-col h-full overflow-hidden">
