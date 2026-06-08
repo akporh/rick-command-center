@@ -715,35 +715,52 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
 
   for (const job of sorted) {
     if (job.riskScore < 40) continue;
+    // Don't propose reassignments on jobs already in execution — too disruptive
+    if (job.status === "in_progress") continue;
     const currentEng = s.engineers.find((e) => e.id === job.assignedEngineer);
+    // Current engineer's ETA to finish this job
+    const curEta = currentEng
+      ? engineerAvailableMin(currentEng, s.jobs, s.traffic) +
+        (currentEng.currentJob === job.id
+          ? 0
+          : travelToJobMin(currentEng, job, s.traffic, s.jobs))
+      : 999;
+
     let bestCandidate: Engineer | null = null;
-    let bestGain = 0;
+    let bestCandEta = curEta;
+    let bestTrafficMult = 1;
     for (const e of s.engineers) {
       if (e.id === job.assignedEngineer) continue;
       if (e.status === "delayed") continue;
       const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
       if (load >= MAX_QUEUE) continue;
       const skillMatch = e.skills.includes(job.skill) ? 1 : 0.5;
-      const d = dist(e.location, job.location);
-      const curD = currentEng ? dist(currentEng.location, job.location) : 1000;
-      const gain = (curD - d) * 0.5 + (skillMatch - 0.7) * 80 - load * 15;
-      if (gain > bestGain) { bestGain = gain; bestCandidate = e; }
+      const avail = engineerAvailableMin(e, s.jobs, s.traffic);
+      const travel = travelToJobMin(e, job, s.traffic, s.jobs);
+      const eta = avail + travel + (skillMatch === 1 ? 0 : 8); // small off-skill penalty
+      if (eta < bestCandEta - 6) { // must beat by at least 6 min
+        bestCandEta = eta;
+        bestCandidate = e;
+        bestTrafficMult = pathTrafficMult(e.location, job.location, s.traffic);
+      }
     }
-    if (bestCandidate && bestGain > 10) {
+    if (bestCandidate) {
       const id = `R-reassign-${job.id}-${bestCandidate.id}`;
       if (dismissed.has(id)) continue;
-      const slaImprovement = Math.min(70, Math.round(bestGain * 0.6 + job.riskScore * 0.2));
-      const travelReductionMin = Math.max(5, Math.round(bestGain * 0.4));
-      const conf = Math.min(98, 55 + Math.round(bestGain / 2));
+      const savedMin = Math.max(5, Math.round(curEta - bestCandEta));
+      const slaImprovement = Math.min(70, Math.round(savedMin * 1.2 + job.riskScore * 0.15));
+      const conf = Math.min(98, 60 + Math.round(savedMin));
+      const startsIn = Math.round(bestCandEta - (bestCandidate.skills.includes(job.skill) ? 0 : 8) - (bestCandEta - engineerAvailableMin(bestCandidate, s.jobs, s.traffic) - travelToJobMin(bestCandidate, job, s.traffic, s.jobs)));
+      const trafficNote = bestTrafficMult > 1.15 ? ` (×${bestTrafficMult.toFixed(1)} traffic en route)` : ` (clear route)`;
       recs.push({
         id,
         type: "reassign",
         jobId: job.id,
         fromEngineer: currentEng?.id,
         toEngineer: bestCandidate.id,
-        reasoning: `Reassign ${job.id} → ${bestCandidate.name.split(" ")[0]} cuts SLA breach risk ${slaImprovement}% and saves ${travelReductionMin} min travel`,
+        reasoning: `${bestCandidate.name.split(" ")[0]} can start in ${Math.max(1, Math.round(bestCandEta))} min${trafficNote} vs ${currentEng ? currentEng.name.split(" ")[0] + " in " + Math.round(curEta) + " min" : "unassigned"}. Cuts SLA risk ${slaImprovement}%, saves ~${savedMin} min.`,
         slaImprovement,
-        travelReductionMin,
+        travelReductionMin: savedMin,
         revenueProtected: Math.round(job.revenue * (slaImprovement / 100)),
         confidence: conf,
         createdAtTick: s.tick,
