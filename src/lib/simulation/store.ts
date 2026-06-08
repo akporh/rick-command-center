@@ -463,6 +463,8 @@ function stepTick() {
 
       if (remaining <= 0 && job.progress < 100) {
         job.status = "breached";
+        // drop any pending AI credit — the action didn't save it
+        if (aiAssistedJobs[job.id]) delete aiAssistedJobs[job.id];
         events = pushEvent(events, {
           tick, kind: "sla_breach", severity: "crit",
           message: `SLA BREACH on ${job.id} (${job.customer}) — £${job.penalty} exposure`,
