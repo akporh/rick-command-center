@@ -1,5 +1,6 @@
-import { useSim } from "@/lib/simulation/store";
+import { useSim, engineerAvailableMin } from "@/lib/simulation/store";
 import { statusLabel } from "@/lib/simulation/format";
+
 
 const statusColor: Record<string, string> = {
   working: "bg-status-ok",
