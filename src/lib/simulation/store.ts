@@ -334,6 +334,10 @@ function stepTick() {
   let jobs = s.jobs.map((j) => ({ ...j }));
   let traffic = s.traffic.filter((z) => z.expiresAtTick > tick);
   let events = s.events;
+  let aiAssistedJobs = { ...s.aiAssistedJobs };
+  // running deltas to apply to metrics this tick
+  let metricsDelta = { revenueProtected: 0, travelSavedMin: 0, aiAcceptedCount: 0 };
+
 
   // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned)
   if (s.systemMode !== "manual") {
