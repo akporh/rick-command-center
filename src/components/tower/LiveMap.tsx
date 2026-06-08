@@ -1,7 +1,25 @@
 import { useSim } from "@/lib/simulation/store";
-import { priorityColor, riskBand } from "@/lib/simulation/format";
+import { priorityColor, riskBand, fmtTime } from "@/lib/simulation/format";
 
 const W = 1000, H = 560;
+
+// Returns true if line segment from a to b passes within radius of (cx, cy).
+function segmentIntersectsCircle(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  cx: number,
+  cy: number,
+  r: number,
+): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((cx - a.x) * dx + (cy - a.y) * dy) / lenSq));
+  const px = a.x + dx * t;
+  const py = a.y + dy * t;
+  return (px - cx) ** 2 + (py - cy) ** 2 <= r * r;
+}
+
 
 const ROADS = [
   "M 50 280 L 950 280",
