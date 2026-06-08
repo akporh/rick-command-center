@@ -684,8 +684,9 @@ function stepTick() {
 
 
 
-function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
-  // score by skill match + distance + load; respect MAX_QUEUE
+// "Soonest available" scoring: pick the engineer who can actually start (and finish) this job
+// the earliest, accounting for queue depth, current trip, traffic on the route, and skill match.
+export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]): Engineer | null {
   let best: Engineer | null = null;
   let bestScore = -Infinity;
   for (const e of engineers) {
@@ -693,12 +694,16 @@ function pickBestEngineer(job: Job, engineers: Engineer[]): Engineer | null {
     const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
     if (load >= MAX_QUEUE) continue;
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
-    const d = dist(e.location, job.location);
-    const score = skillMatch * 100 - d * 0.1 - load * 35 + e.efficiency * 0.2 - e.fatigue * 0.1;
+    const avail = engineerAvailableMin(e, jobs, traffic);
+    const travel = travelToJobMin(e, job, traffic, jobs);
+    const totalMin = avail + travel + (job.durationBase / Math.max(0.4, e.speedFactor)) * (skillMatch === 1 ? 1 : 1.25);
+    // negate so lower minutes = higher score, plus quality bonuses
+    const score = -totalMin + (skillMatch === 1 ? 25 : 0) + e.efficiency * 0.15 - e.fatigue * 0.08;
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
 }
+
 
 function computeRecommendations(s: SimState): AIRecommendation[] {
   const recs: AIRecommendation[] = [];
