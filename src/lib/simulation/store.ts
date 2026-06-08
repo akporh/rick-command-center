@@ -253,20 +253,25 @@ export const useSim = create<SimState & Actions>((set, get) => ({
     if (r.type === "reassign" && r.toEngineer) {
       get().reassign(r.jobId, r.toEngineer);
     }
-    set((cur) => ({
-      recommendations: cur.recommendations.filter((x) => x.id !== id),
-      dismissedRecs: cur.dismissedRecs.includes(id) ? cur.dismissedRecs : [...cur.dismissedRecs, id],
-      metrics: {
-        ...cur.metrics,
-        aiAcceptedCount: cur.metrics.aiAcceptedCount + 1,
-        revenueProtected: cur.metrics.revenueProtected + r.revenueProtected,
-        travelSavedMin: cur.metrics.travelSavedMin + r.travelReductionMin,
-      },
-      events: pushEvent(cur.events, {
-        tick: cur.tick, kind: "reassigned", severity: "ok",
-        message: `AI action accepted: ${r.reasoning}`,
-      }),
-    }));
+    set((cur) => {
+      const prior = cur.aiAssistedJobs[r.jobId] ?? { revenue: 0, travel: 0 };
+      return {
+        recommendations: cur.recommendations.filter((x) => x.id !== id),
+        dismissedRecs: cur.dismissedRecs.includes(id) ? cur.dismissedRecs : [...cur.dismissedRecs, id],
+        aiAssistedJobs: {
+          ...cur.aiAssistedJobs,
+          [r.jobId]: { revenue: prior.revenue + r.revenueProtected, travel: prior.travel + r.travelReductionMin },
+        },
+        metrics: {
+          ...cur.metrics,
+          aiAcceptedCount: cur.metrics.aiAcceptedCount + 1,
+        },
+        events: pushEvent(cur.events, {
+          tick: cur.tick, kind: "reassigned", severity: "ok",
+          message: `AI action accepted: ${r.reasoning}`,
+        }),
+      };
+    });
   },
   rejectRecommendation: (id) => {
     set((s) => ({
