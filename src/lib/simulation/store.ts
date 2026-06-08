@@ -567,51 +567,78 @@ function stepTick() {
     slaHealth,
     completed,
     breached,
+    revenueProtected: s.metrics.revenueProtected + metricsDelta.revenueProtected,
+    travelSavedMin: s.metrics.travelSavedMin + metricsDelta.travelSavedMin,
+    aiAcceptedCount: s.metrics.aiAcceptedCount + metricsDelta.aiAcceptedCount,
   };
 
   // Prune dismissed IDs for jobs that no longer exist / are closed
   const dismissedRecs = pruneDismissed(s.dismissedRecs, jobs);
 
   // Generate recommendations
-  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations, dismissedRecs };
+  const state: SimState = { ...s, tick, simTimeMinutes, engineers, jobs, traffic, events, metrics, recommendations: s.recommendations, dismissedRecs, aiAssistedJobs };
   const fresh = computeRecommendations(state);
 
-  // Autopilot auto-accept top recs (and dismiss them so they don't reappear)
+  // Autopilot auto-accept — with guardrails to stop reassignment thrash:
+  //  - Skip jobs currently in_progress or recently reassigned (cooldown 18 sim-min = 6 ticks)
+  //  - Skip engineers that took an auto action in last 3 ticks (source or target)
+  //  - Cap to 1 auto-accept per tick
+  //  - Only accept high-confidence: slaImprovement >= 15 OR riskScore >= 70
   const autoDismissed: string[] = [];
   let actionable = fresh;
   if (s.systemMode === "autopilot" && fresh.length > 0) {
-    const top = fresh.slice(0, 2);
-    for (const r of top) {
-      if (r.type === "reassign" && r.toEngineer) {
-        // perform reassignment immediately
-        const to = engineers.find((e) => e.id === r.toEngineer);
-        const job = jobs.find((j) => j.id === r.jobId);
-        if (to && job) {
-          // unassign from previous
-          for (const e of engineers) {
-            if (e.currentJob === job.id) { e.currentJob = null; e.status = "idle"; }
-            e.nextJobs = e.nextJobs.filter((x) => x !== job.id);
-          }
-          if (!to.currentJob) {
-            to.currentJob = job.id;
-            to.destination = job.location;
-            to.status = "en_route";
-            job.status = "en_route";
-          } else {
-            to.nextJobs.push(job.id);
-            job.status = "assigned";
-          }
-          job.assignedEngineer = to.id;
-          metrics.aiAcceptedCount += 1;
-          metrics.revenueProtected += r.revenueProtected;
-          metrics.travelSavedMin += r.travelReductionMin;
-          autoDismissed.push(r.id);
-          events = pushEvent(events, {
-            tick, kind: "reassigned", severity: "ok",
-            message: `[AUTOPILOT] ${r.reasoning}`,
-          });
+    const JOB_COOLDOWN_TICKS = 6;
+    const ENG_COOLDOWN_TICKS = 3;
+    for (const r of fresh) {
+      if (autoDismissed.length >= 1) break; // 1 per tick
+      if (r.type !== "reassign" || !r.toEngineer) continue;
+      const job = jobs.find((j) => j.id === r.jobId);
+      const to = engineers.find((e) => e.id === r.toEngineer);
+      const from = r.fromEngineer ? engineers.find((e) => e.id === r.fromEngineer) : undefined;
+      if (!job || !to) continue;
+      // Guardrails
+      if (job.status === "in_progress") continue;
+      if (job.status === "en_route") {
+        // skip if we're already well into the trip
+        const eng = engineers.find((e) => e.id === job.assignedEngineer);
+        if (eng && eng.destination) {
+          const total = dist(eng.location, eng.destination) + 0.0001;
+          // can't easily know start, so use simple guard: if eng is near destination, skip
+          if (total < 80) continue;
         }
       }
+      if (job.lastReassignedTick !== undefined && tick - job.lastReassignedTick < JOB_COOLDOWN_TICKS) continue;
+      if (to.lastAutoActionTick !== undefined && tick - to.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
+      if (from && from.lastAutoActionTick !== undefined && tick - from.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
+      if (!(r.slaImprovement >= 15 || job.riskScore >= 70)) continue;
+
+      // Perform reassignment
+      for (const e of engineers) {
+        if (e.currentJob === job.id) { e.currentJob = null; e.status = "idle"; }
+        e.nextJobs = e.nextJobs.filter((x) => x !== job.id);
+      }
+      if (!to.currentJob) {
+        to.currentJob = job.id;
+        to.destination = job.location;
+        to.status = "en_route";
+        job.status = "en_route";
+      } else {
+        to.nextJobs.push(job.id);
+        job.status = "assigned";
+      }
+      job.assignedEngineer = to.id;
+      job.lastReassignedTick = tick;
+      to.lastAutoActionTick = tick;
+      if (from) from.lastAutoActionTick = tick;
+      // Track for deferred revenue credit on actual completion
+      const prior = aiAssistedJobs[job.id] ?? { revenue: 0, travel: 0 };
+      aiAssistedJobs[job.id] = { revenue: prior.revenue + r.revenueProtected, travel: prior.travel + r.travelReductionMin };
+      metrics.aiAcceptedCount += 1;
+      autoDismissed.push(r.id);
+      events = pushEvent(events, {
+        tick, kind: "reassigned", severity: "ok",
+        message: `[AUTOPILOT] ${r.reasoning}`,
+      });
     }
     actionable = fresh.filter((r) => !autoDismissed.includes(r.id));
   }
