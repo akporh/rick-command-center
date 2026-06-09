@@ -604,17 +604,8 @@ function stepTick() {
       const to = engineers.find((e) => e.id === r.toEngineer);
       const from = r.fromEngineer ? engineers.find((e) => e.id === r.fromEngineer) : undefined;
       if (!job || !to) continue;
-      // Guardrails
-      if (job.status === "in_progress") continue;
-      if (job.status === "en_route") {
-        // skip if we're already well into the trip
-        const eng = engineers.find((e) => e.id === job.assignedEngineer);
-        if (eng && eng.destination) {
-          const total = dist(eng.location, eng.destination) + 0.0001;
-          // can't easily know start, so use simple guard: if eng is near destination, skip
-          if (total < 80) continue;
-        }
-      }
+      // Guardrails: only touch jobs not yet moving — never interrupt en_route or in_progress
+      if (job.status !== "queued" && job.status !== "assigned") continue;
       if (job.lastReassignedTick !== undefined && tick - job.lastReassignedTick < JOB_COOLDOWN_TICKS) continue;
       if (to.lastAutoActionTick !== undefined && tick - to.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
       if (from && from.lastAutoActionTick !== undefined && tick - from.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
