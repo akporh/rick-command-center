@@ -71,6 +71,11 @@ export function seedJobs(count = 14, rng = makeRng(99)): Job[] {
     const priority = priorities[Math.floor(rng() * priorities.length)];
     const durationBase = 25 + Math.floor(rng() * 110);
     const revenue = 200 + Math.floor(rng() * 1800);
+    // SLA must give realistic slack: work time + travel + buffer
+    // duration / 3 = ticks of work; add 12-30 ticks of travel+slack
+    const workTicks = Math.ceil(durationBase / 3);
+    const slack = priority === "critical" ? 14 : priority === "high" ? 20 : 28;
+    const slaDeadlineTick = workTicks + slack + Math.floor(rng() * 30);
     jobs.push({
       id: `J${String(i + 1).padStart(3, "0")}`,
       title: titles[Math.floor(rng() * titles.length)],
@@ -79,7 +84,7 @@ export function seedJobs(count = 14, rng = makeRng(99)): Job[] {
       priority,
       durationBase,
       progress: 0,
-      slaDeadlineTick: 30 + Math.floor(rng() * 180),
+      slaDeadlineTick,
       spawnTick: 0,
       revenue,
       penalty: Math.floor(revenue * (0.4 + rng() * 0.6)),
