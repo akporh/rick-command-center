@@ -106,7 +106,7 @@ export function newJob(id: number, tick: number, rng: () => number, emergency = 
   const durationBase = 25 + Math.floor(rng() * 90);
   const workTicks = Math.ceil(durationBase / 3);
   // Emergencies still tight but achievable; normal jobs get generous slack
-  const slack = emergency ? 12 : 22 + Math.floor(rng() * 24);
+  const slack = emergency ? 20 : 34 + Math.floor(rng() * 24);
   return {
     id: `J${String(id).padStart(3, "0")}`,
     title: (emergency ? "EMERGENCY: " : "") + titles[Math.floor(rng() * titles.length)],
