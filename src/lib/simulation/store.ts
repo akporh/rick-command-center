@@ -120,7 +120,7 @@ interface Actions {
 }
 
 const initialEngineers = seedEngineers(8);
-const initialJobs = seedJobs(14);
+const initialJobs = seedJobs(10);
 
 export const useSim = create<SimState & Actions>((set, get) => ({
   tick: 0,
