@@ -74,7 +74,7 @@ export function seedJobs(count = 14, rng = makeRng(99)): Job[] {
     // SLA must give realistic slack: work time + travel + buffer
     // duration / 3 = ticks of work; add 12-30 ticks of travel+slack
     const workTicks = Math.ceil(durationBase / 3);
-    const slack = priority === "critical" ? 14 : priority === "high" ? 20 : 28;
+    const slack = priority === "critical" ? 22 : priority === "high" ? 32 : 44;
     const slaDeadlineTick = workTicks + slack + Math.floor(rng() * 30);
     jobs.push({
       id: `J${String(i + 1).padStart(3, "0")}`,
