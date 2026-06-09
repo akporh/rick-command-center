@@ -506,8 +506,8 @@ function stepTick() {
 
   // Job injection
   if (!pastEOD) {
-    const base = s.simMode === "stress" ? 0.45 : 0.2;
-    const floor = s.simMode === "stress" ? 0.15 : 0;
+    const base = s.simMode === "stress" ? 0.4 : 0.12;
+    const floor = s.simMode === "stress" ? 0.12 : 0;
     const injectionChance = Math.max(floor, base * backPressure);
     if (rng() < injectionChance) {
       jobCounter++;
