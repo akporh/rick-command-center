@@ -340,21 +340,28 @@ function stepTick() {
 
 
   // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned)
+  // Process most-urgent first: critical priority, then earliest SLA deadline.
   if (s.systemMode !== "manual") {
-    for (const job of jobs) {
-      if (job.status === "queued") {
-        const candidate = pickBestEngineer(job, engineers, jobs, traffic);
-        if (candidate) {
-          job.assignedEngineer = candidate.id;
-          if (!candidate.currentJob) {
-            candidate.currentJob = job.id;
-            candidate.destination = job.location;
-            candidate.status = "en_route";
-            job.status = "en_route";
-          } else {
-            candidate.nextJobs.push(job.id);
-            job.status = "assigned";
-          }
+    const priWeight = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+    const queuedSorted = jobs
+      .filter((j) => j.status === "queued")
+      .sort((a, b) => {
+        const pa = priWeight[a.priority], pb = priWeight[b.priority];
+        if (pa !== pb) return pa - pb;
+        return a.slaDeadlineTick - b.slaDeadlineTick;
+      });
+    for (const job of queuedSorted) {
+      const candidate = pickBestEngineer(job, engineers, jobs, traffic);
+      if (candidate) {
+        job.assignedEngineer = candidate.id;
+        if (!candidate.currentJob) {
+          candidate.currentJob = job.id;
+          candidate.destination = job.location;
+          candidate.status = "en_route";
+          job.status = "en_route";
+        } else {
+          candidate.nextJobs.push(job.id);
+          job.status = "assigned";
         }
       }
     }
