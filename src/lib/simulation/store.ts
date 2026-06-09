@@ -693,9 +693,10 @@ function stepTick() {
 
 // "Soonest available" scoring: pick the engineer who can actually start (and finish) this job
 // the earliest, accounting for queue depth, current trip, traffic on the route, and skill match.
-export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]): Engineer | null {
+export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], traffic: TrafficZone[], currentTick = 0): Engineer | null {
   let best: Engineer | null = null;
   let bestScore = -Infinity;
+  const slaMinRemaining = (job.slaDeadlineTick - currentTick) * SIM_MINUTES_PER_TICK;
   for (const e of engineers) {
     if (e.status === "delayed") continue;
     const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
@@ -703,9 +704,17 @@ export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], t
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
     const avail = engineerAvailableMin(e, jobs, traffic);
     const travel = travelToJobMin(e, job, traffic, jobs);
-    const totalMin = avail + travel + (job.durationBase / Math.max(0.4, e.speedFactor)) * (skillMatch === 1 ? 1 : 1.25);
+    const workMin = (job.durationBase / Math.max(0.4, e.speedFactor)) * (skillMatch === 1 ? 1 : 1.25);
+    const totalMin = avail + travel + workMin;
+    // Heavy penalty if this engineer cannot finish before SLA (or finishes very close)
+    let slaPenalty = 0;
+    if (slaMinRemaining > 0) {
+      const overshoot = totalMin - slaMinRemaining;
+      if (overshoot > 0) slaPenalty = overshoot * 3; // 3x weight for breach minutes
+      else if (totalMin > slaMinRemaining * 0.85) slaPenalty = (totalMin - slaMinRemaining * 0.85) * 1.2;
+    }
     // negate so lower minutes = higher score, plus quality bonuses
-    const score = -totalMin + (skillMatch === 1 ? 25 : 0) + e.efficiency * 0.15 - e.fatigue * 0.08;
+    const score = -totalMin - slaPenalty + (skillMatch === 1 ? 25 : 0) + e.efficiency * 0.15 - e.fatigue * 0.08;
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
