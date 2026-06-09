@@ -71,6 +71,11 @@ export function seedJobs(count = 14, rng = makeRng(99)): Job[] {
     const priority = priorities[Math.floor(rng() * priorities.length)];
     const durationBase = 25 + Math.floor(rng() * 110);
     const revenue = 200 + Math.floor(rng() * 1800);
+    // SLA must give realistic slack: work time + travel + buffer
+    // duration / 3 = ticks of work; add 12-30 ticks of travel+slack
+    const workTicks = Math.ceil(durationBase / 3);
+    const slack = priority === "critical" ? 14 : priority === "high" ? 20 : 28;
+    const slaDeadlineTick = workTicks + slack + Math.floor(rng() * 30);
     jobs.push({
       id: `J${String(i + 1).padStart(3, "0")}`,
       title: titles[Math.floor(rng() * titles.length)],
@@ -79,7 +84,7 @@ export function seedJobs(count = 14, rng = makeRng(99)): Job[] {
       priority,
       durationBase,
       progress: 0,
-      slaDeadlineTick: 30 + Math.floor(rng() * 180),
+      slaDeadlineTick,
       spawnTick: 0,
       revenue,
       penalty: Math.floor(revenue * (0.4 + rng() * 0.6)),
@@ -98,15 +103,19 @@ export function newJob(id: number, tick: number, rng: () => number, emergency = 
   const titles = JOB_TITLES[skill];
   const priority = emergency ? "critical" : (["low", "medium", "high"] as const)[Math.floor(rng() * 3)];
   const revenue = emergency ? 1200 + Math.floor(rng() * 1500) : 200 + Math.floor(rng() * 1500);
+  const durationBase = 25 + Math.floor(rng() * 90);
+  const workTicks = Math.ceil(durationBase / 3);
+  // Emergencies still tight but achievable; normal jobs get generous slack
+  const slack = emergency ? 12 : 22 + Math.floor(rng() * 24);
   return {
     id: `J${String(id).padStart(3, "0")}`,
     title: (emergency ? "EMERGENCY: " : "") + titles[Math.floor(rng() * titles.length)],
     customer: CUSTOMERS[Math.floor(rng() * CUSTOMERS.length)],
     location: { x: 120 + rng() * 760, y: 90 + rng() * 420 },
     priority,
-    durationBase: 25 + Math.floor(rng() * 90),
+    durationBase,
     progress: 0,
-    slaDeadlineTick: tick + (emergency ? 25 : 40 + Math.floor(rng() * 90)),
+    slaDeadlineTick: tick + workTicks + slack,
     spawnTick: tick,
     revenue,
     penalty: Math.floor(revenue * (0.5 + rng() * 0.5)),
