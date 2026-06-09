@@ -376,9 +376,10 @@ function stepTick() {
       else e.status = "idle";
     }
     if (e.delayUntil) continue;
-    if (rng() < 0.04 * stressFactor) {
+    const delayChance = s.simMode === "stress" ? 0.05 : 0.012;
+    if (rng() < delayChance) {
       e.status = "delayed";
-      const len = 2 + Math.floor(rng() * 4);
+      const len = 2 + Math.floor(rng() * 3);
       e.delayUntil = tick + len;
       events = pushEvent(events, {
         tick, kind: "delay", severity: "warn",
