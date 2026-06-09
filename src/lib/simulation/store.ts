@@ -185,7 +185,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       tick: 0,
       simTimeMinutes: 0,
       engineers: seedEngineers(8, makeRng(seed + 1)),
-      jobs: seedJobs(14, makeRng(seed + 2)),
+      jobs: seedJobs(10, makeRng(seed + 2)),
       traffic: [],
       recommendations: [],
       dismissedRecs: [],
