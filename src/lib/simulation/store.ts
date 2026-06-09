@@ -351,7 +351,7 @@ function stepTick() {
         return a.slaDeadlineTick - b.slaDeadlineTick;
       });
     for (const job of queuedSorted) {
-      const candidate = pickBestEngineer(job, engineers, jobs, traffic);
+      const candidate = pickBestEngineer(job, engineers, jobs, traffic, tick);
       if (candidate) {
         job.assignedEngineer = candidate.id;
         if (!candidate.currentJob) {
