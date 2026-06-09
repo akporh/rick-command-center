@@ -120,7 +120,7 @@ interface Actions {
 }
 
 const initialEngineers = seedEngineers(8);
-const initialJobs = seedJobs(14);
+const initialJobs = seedJobs(10);
 
 export const useSim = create<SimState & Actions>((set, get) => ({
   tick: 0,
@@ -185,7 +185,7 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       tick: 0,
       simTimeMinutes: 0,
       engineers: seedEngineers(8, makeRng(seed + 1)),
-      jobs: seedJobs(14, makeRng(seed + 2)),
+      jobs: seedJobs(10, makeRng(seed + 2)),
       traffic: [],
       recommendations: [],
       dismissedRecs: [],
@@ -376,9 +376,10 @@ function stepTick() {
       else e.status = "idle";
     }
     if (e.delayUntil) continue;
-    if (rng() < 0.04 * stressFactor) {
+    const delayChance = s.simMode === "stress" ? 0.05 : 0.012;
+    if (rng() < delayChance) {
       e.status = "delayed";
-      const len = 2 + Math.floor(rng() * 4);
+      const len = 2 + Math.floor(rng() * 3);
       e.delayUntil = tick + len;
       events = pushEvent(events, {
         tick, kind: "delay", severity: "warn",
@@ -505,8 +506,8 @@ function stepTick() {
 
   // Job injection
   if (!pastEOD) {
-    const base = s.simMode === "stress" ? 0.45 : 0.2;
-    const floor = s.simMode === "stress" ? 0.15 : 0;
+    const base = s.simMode === "stress" ? 0.4 : 0.08;
+    const floor = s.simMode === "stress" ? 0.12 : 0;
     const injectionChance = Math.max(floor, base * backPressure);
     if (rng() < injectionChance) {
       jobCounter++;
@@ -603,17 +604,8 @@ function stepTick() {
       const to = engineers.find((e) => e.id === r.toEngineer);
       const from = r.fromEngineer ? engineers.find((e) => e.id === r.fromEngineer) : undefined;
       if (!job || !to) continue;
-      // Guardrails
-      if (job.status === "in_progress") continue;
-      if (job.status === "en_route") {
-        // skip if we're already well into the trip
-        const eng = engineers.find((e) => e.id === job.assignedEngineer);
-        if (eng && eng.destination) {
-          const total = dist(eng.location, eng.destination) + 0.0001;
-          // can't easily know start, so use simple guard: if eng is near destination, skip
-          if (total < 80) continue;
-        }
-      }
+      // Guardrails: only touch jobs not yet moving — never interrupt en_route or in_progress
+      if (job.status !== "queued" && job.status !== "assigned") continue;
       if (job.lastReassignedTick !== undefined && tick - job.lastReassignedTick < JOB_COOLDOWN_TICKS) continue;
       if (to.lastAutoActionTick !== undefined && tick - to.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
       if (from && from.lastAutoActionTick !== undefined && tick - from.lastAutoActionTick < ENG_COOLDOWN_TICKS) continue;
