@@ -7,6 +7,7 @@ const statusColor: Record<string, string> = {
   en_route: "bg-status-info",
   delayed: "bg-status-crit",
   idle: "bg-status-idle",
+  off_shift: "bg-muted-foreground/40",
 };
 
 export function EngineerPanel() {
@@ -29,18 +30,31 @@ export function EngineerPanel() {
               onClick={() => selectEngineer(e.id)}
               className={`text-left rounded border p-2 transition-all ${
                 selected ? "border-primary bg-primary/5" : "border-panel-border bg-background/40 hover:bg-background/60"
-              }`}
+              } ${e.status === "off_shift" ? "opacity-50" : ""}`}
             >
               <div className="flex items-center gap-2 mb-1.5">
-                <div className="w-7 h-7 rounded bg-secondary grid place-items-center font-mono font-bold text-xs">{e.initials}</div>
+                <div className="w-7 h-7 rounded bg-secondary grid place-items-center font-mono font-bold text-xs relative">
+                  {e.initials}
+                  {e.overtimeWilling && (
+                    <span
+                      title="Willing to work overtime"
+                      className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-status-warn"
+                    />
+                  )}
+                </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-mono truncate">{e.name}</div>
+                  <div className="text-xs font-mono truncate flex items-center gap-1">
+                    {e.name}
+                    {e.overtime && (
+                      <span className="text-[8px] font-mono uppercase tracking-widest px-1 py-0.5 rounded bg-status-warn/20 text-status-warn">OT</span>
+                    )}
+                  </div>
                   <div className="text-[9px] uppercase tracking-widest text-muted-foreground">{e.id} · {e.skills.join(", ")}</div>
                 </div>
-                <span className={`w-1.5 h-1.5 rounded-full ${statusColor[e.status]} pulse-dot`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${statusColor[e.status]} ${e.status === "off_shift" ? "" : "pulse-dot"}`} />
               </div>
               <div className="text-[10px] font-mono text-muted-foreground mb-1">
-                <span className="text-foreground/80">{statusLabel(e.status)}</span>
+                <span className="text-foreground/80">{e.status === "off_shift" ? "Off shift" : statusLabel(e.status)}</span>
                 {cur && <span> · {cur.id} @ {cur.customer}</span>}
               </div>
               <div className="flex items-center gap-2 text-[9px] font-mono">
