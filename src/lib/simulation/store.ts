@@ -867,7 +867,7 @@ export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], t
   let bestScore = -Infinity;
   const slaMinRemaining = (job.slaDeadlineTick - currentTick) * SIM_MINUTES_PER_TICK;
   for (const e of engineers) {
-    if (e.status === "delayed") continue;
+    if (e.status === "delayed" || e.status === "off_shift") continue;
     const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
     if (load >= MAX_QUEUE) continue;
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
