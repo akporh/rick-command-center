@@ -816,21 +816,28 @@ function stepTick() {
     ? [...dismissedRecs, ...autoDismissed.filter((id) => !dismissedRecs.includes(id))]
     : dismissedRecs;
 
-  // End-of-day handling
+  // End-of-day handling — snapshot carry-over at the freeze boundary
   let dayEnded = s.dayEnded;
-  if (!dayEnded && simTimeMinutes >= DAY_END_MIN + WIND_DOWN_MIN) {
+  let carriedJobs = s.carriedJobs;
+  if (!dayEnded && simTimeMinutes >= FREEZE_MIN) {
     dayEnded = true;
-    const openLeft = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+    const openLeft = jobs.filter((j) => j.status !== "completed" && j.status !== "breached");
+    carriedJobs = openLeft.map((j) => ({ ...j }));
     events = pushEvent(events, {
       tick, kind: "tick", severity: "info",
-      message: `🛑 End of Day 17:30 — ${metrics.completed} completed · ${metrics.breached} breached · ${openLeft} carried over · £${metrics.revenueProtected} protected`,
+      message: `🛑 End of Day ${s.dayNumber} 17:30 — ${metrics.completed} completed · ${metrics.breached} breached · ${openLeft.length} carried over · £${metrics.revenueProtected} protected`,
     });
     // pause loop on next frame
     setTimeout(() => useSim.getState().stop(), 0);
-  } else if (!dayEnded && simTimeMinutes === DAY_END_MIN) {
+  } else if (!dayEnded && s.simTimeMinutes < DAY_END_MIN && simTimeMinutes >= DAY_END_MIN) {
     events = pushEvent(events, {
       tick, kind: "tick", severity: "warn",
-      message: `17:00 — End of shift. No new bookings; engineers winding down in-flight work.`,
+      message: `17:00 — End of shift. OT engineers completing in-flight work; others standing down.`,
+    });
+  } else if (!dayEnded && s.simTimeMinutes < WIND_DOWN_START_MIN && simTimeMinutes >= WIND_DOWN_START_MIN) {
+    events = pushEvent(events, {
+      tick, kind: "tick", severity: "info",
+      message: `16:00 — Wind-down. New low/medium jobs deferred to tomorrow unless they fit before 17:00.`,
     });
   }
 
@@ -845,6 +852,8 @@ function stepTick() {
     recommendations: mergedRecs,
     dismissedRecs: nextDismissed,
     dayEnded,
+    dayPhase,
+    carriedJobs,
     aiAssistedJobs,
   });
 }
