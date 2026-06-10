@@ -21,6 +21,8 @@ export interface Engineer {
   nextJobs: string[];
   delayUntil: number | null;
   lastAutoActionTick?: number;
+  overtimeWilling: boolean;
+  overtime?: boolean;
 }
 
 export interface Job {
@@ -41,6 +43,8 @@ export interface Job {
   status: JobStatus;
   assignedEngineer: string | null;
   lastReassignedTick?: number;
+  rollToTomorrow?: boolean;
+  carriedFromDay?: number;
 }
 
 export interface TrafficZone {
