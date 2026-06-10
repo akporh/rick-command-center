@@ -447,33 +447,91 @@ function stepTick() {
   let metricsDelta = { revenueProtected: 0, travelSavedMin: 0, aiAcceptedCount: 0 };
 
 
-  // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned)
-  // Process most-urgent first: critical priority, then earliest SLA deadline.
-  if (s.systemMode !== "manual") {
+  const dayPhase: DayPhase = computeDayPhase(simTimeMinutes);
+
+  // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned).
+  // During wind-down (16:00-17:00), low/medium jobs only assign if they can finish by EOD; otherwise
+  // they roll to tomorrow. Critical/high jobs that can't fit get a second pass on OT-willing engineers.
+  // After EOD (17:00+), no new dispatch at all — in-flight jobs (including OT) keep ticking.
+  if (s.systemMode !== "manual" && dayPhase !== "eod") {
     const priWeight = { critical: 0, high: 1, medium: 2, low: 3 } as const;
     const queuedSorted = jobs
-      .filter((j) => j.status === "queued")
+      .filter((j) => j.status === "queued" && !j.rollToTomorrow)
       .sort((a, b) => {
         const pa = priWeight[a.priority], pb = priWeight[b.priority];
         if (pa !== pb) return pa - pb;
         return a.slaDeadlineTick - b.slaDeadlineTick;
       });
+
+    const fitsBeforeEOD = (cand: Engineer, job: Job): boolean => {
+      const etaMin =
+        engineerAvailableMin(cand, jobs, traffic) +
+        travelToJobMin(cand, job, traffic, jobs) +
+        job.durationBase / Math.max(0.4, cand.speedFactor);
+      return simTimeMinutes + etaMin <= DAY_END_MIN;
+    };
+
+    const assignTo = (cand: Engineer, job: Job, isOT = false) => {
+      job.assignedEngineer = cand.id;
+      if (!cand.currentJob) {
+        cand.currentJob = job.id;
+        cand.destination = job.location;
+        cand.status = "en_route";
+        job.status = "en_route";
+      } else {
+        cand.nextJobs.push(job.id);
+        job.status = "assigned";
+      }
+      if (isOT) cand.overtime = true;
+    };
+
     for (const job of queuedSorted) {
       const candidate = pickBestEngineer(job, engineers, jobs, traffic, tick);
-      if (candidate) {
-        job.assignedEngineer = candidate.id;
-        if (!candidate.currentJob) {
-          candidate.currentJob = job.id;
-          candidate.destination = job.location;
-          candidate.status = "en_route";
-          job.status = "en_route";
-        } else {
-          candidate.nextJobs.push(job.id);
-          job.status = "assigned";
+      if (!candidate) continue;
+
+      if (dayPhase === "winddown" && !fitsBeforeEOD(candidate, job)) {
+        // Low/medium: defer to tomorrow
+        if (job.priority === "low" || job.priority === "medium") {
+          job.rollToTomorrow = true;
+          events = pushEvent(events, {
+            tick, kind: "tick", severity: "warn",
+            message: `${job.id} deferred to tomorrow — customer ${job.customer} notified.`,
+          });
+          continue;
         }
+        // Critical/high: try OT-willing engineer that hasn't taken OT yet
+        const otCand = engineers
+          .filter((e) => e.overtimeWilling && !e.overtime && e.status !== "delayed")
+          .filter((e) => (e.currentJob ? 1 : 0) + e.nextJobs.length < MAX_QUEUE)
+          .sort((a, b) => engineerAvailableMin(a, jobs, traffic) - engineerAvailableMin(b, jobs, traffic))[0];
+        if (otCand) {
+          assignTo(otCand, job, true);
+          events = pushEvent(events, {
+            tick, kind: "reassigned", severity: "warn",
+            message: `OT dispatch: ${otCand.name.split(" ")[0]} taking ${job.id} (${job.priority}) past 17:00.`,
+          });
+        } else {
+          job.rollToTomorrow = true;
+          events = pushEvent(events, {
+            tick, kind: "sla_breach", severity: "risk",
+            message: `${job.id} (${job.priority}) deferred — no OT capacity; ${job.customer} notified.`,
+          });
+        }
+        continue;
       }
+
+      assignTo(candidate, job);
     }
   }
+
+  // Flip idle engineers to off_shift once EOD hits and they have no in-flight work
+  if (dayPhase === "eod") {
+    for (const e of engineers) {
+      const hasWork = e.currentJob || e.nextJobs.length > 0 || e.status === "en_route";
+      if (!hasWork && e.status !== "off_shift") e.status = "off_shift";
+    }
+  }
+
 
   // Engineer movement + delays
   const stressFactor = s.simMode === "stress" ? 2.2 : 1;
