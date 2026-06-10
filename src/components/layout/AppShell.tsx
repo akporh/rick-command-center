@@ -15,9 +15,17 @@ const navItems = [
 
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const { running, toggle, speed, setSpeed, systemMode, setSystemMode, simTimeMinutes, metrics, engineers, jobs, tick, dayEnded } = useSim();
-  const active = engineers.filter((e) => e.status !== "idle").length;
+  const { running, toggle, speed, setSpeed, systemMode, setSystemMode, simTimeMinutes, metrics, engineers, jobs, tick, dayEnded, dayPhase, dayNumber } = useSim();
+  const active = engineers.filter((e) => e.status !== "idle" && e.status !== "off_shift").length;
   const openJobs = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+
+  const phaseMeta: Record<typeof dayPhase, { label: string; cls: string }> = {
+    preshift: { label: "Pre-shift", cls: "bg-status-info/15 text-status-info" },
+    active: { label: "Active", cls: "bg-status-ok/15 text-status-ok" },
+    winddown: { label: "Wind-down", cls: "bg-status-warn/15 text-status-warn" },
+    eod: { label: dayEnded ? "Closed" : "EOD", cls: "bg-status-crit/15 text-status-crit" },
+  };
+  const phase = phaseMeta[dayPhase];
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
@@ -33,12 +41,10 @@ export function AppShell() {
 
         <div className="flex items-center gap-1 px-3 py-1 rounded border border-panel-border bg-background/40">
           <Radio size={12} className={dayEnded ? "text-muted-foreground" : "text-status-ok pulse-dot"} />
-          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{dayEnded ? "Closed" : "Live"}</span>
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Day {dayNumber}</span>
           <span className="font-mono text-xs ml-2 text-status-info">{fmtTime(simTimeMinutes)}</span>
           <span className="font-mono text-[10px] ml-2 text-muted-foreground">T{String(tick).padStart(3, "0")}</span>
-          {dayEnded && (
-            <span className="ml-2 text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-status-crit/15 text-status-crit">EOD</span>
-          )}
+          <span className={`ml-2 text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded ${phase.cls}`}>{phase.label}</span>
         </div>
 
         <Metric label="SLA Health" value={`${metrics.slaHealth}%`} accent={metrics.slaHealth > 80 ? "ok" : metrics.slaHealth > 60 ? "warn" : "crit"} />
