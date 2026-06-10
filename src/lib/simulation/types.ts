@@ -110,6 +110,9 @@ export interface SimState {
   recommendations: AIRecommendation[];
   dismissedRecs: string[];
   dayEnded: boolean;
+  dayPhase: DayPhase;
+  dayNumber: number;
+  carriedJobs: Job[];
   events: SimEvent[];
   aiAssistedJobs: Record<string, { revenue: number; travel: number }>;
   metrics: {
