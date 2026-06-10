@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useSim } from "@/lib/simulation/store";
 import { severityColor, fmtTime } from "@/lib/simulation/format";
-import { RotateCcw, Zap, Activity, Skull } from "lucide-react";
+import { RotateCcw, Zap, Activity, Skull, Sunrise } from "lucide-react";
 
 export const Route = createFileRoute("/simulation")({
   component: Simulation,
@@ -17,7 +17,7 @@ const SCRIPT = [
 ];
 
 function Simulation() {
-  const { simMode, setSimMode, reset, simTimeMinutes, events, simTimeMinutes: t } = useSim();
+  const { simMode, setSimMode, reset, simTimeMinutes, events, simTimeMinutes: t, dayEnded, dayNumber, carriedJobs, startNextDay } = useSim();
   const modes = [
     { id: "scripted" as const, label: "Scripted Demo", icon: Activity, desc: "Deterministic — same wow moment every run" },
     { id: "live" as const, label: "Live Simulation", icon: Zap, desc: "Randomised — different outcome each run" },
@@ -51,12 +51,25 @@ function Simulation() {
             );
           })}
         </div>
-        <button
-          onClick={() => reset()}
-          className="flex items-center gap-2 px-3 py-2 rounded border border-panel-border text-xs font-mono uppercase tracking-widest hover:bg-secondary"
-        >
-          <RotateCcw size={12} /> Restart Simulation
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => reset()}
+            className="flex items-center gap-2 px-3 py-2 rounded border border-panel-border text-xs font-mono uppercase tracking-widest hover:bg-secondary"
+          >
+            <RotateCcw size={12} /> Restart Simulation
+          </button>
+          {dayEnded && (
+            <button
+              onClick={() => startNextDay()}
+              className="flex items-center gap-2 px-3 py-2 rounded border border-primary bg-primary/10 text-primary text-xs font-mono uppercase tracking-widest hover:bg-primary/20"
+            >
+              <Sunrise size={12} /> Start Day {dayNumber + 1}
+              {carriedJobs.length > 0 && (
+                <span className="ml-1 text-[9px] opacity-80">({carriedJobs.length} carried)</span>
+              )}
+            </button>
+          )}
+        </div>
 
         <div>
           <div className="text-[11px] uppercase tracking-widest text-muted-foreground font-mono mb-2">Day-in-the-life Script</div>

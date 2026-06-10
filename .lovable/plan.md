@@ -1,81 +1,61 @@
-# Plan: Mode behaviour, smarter dispatch, honest metrics, map clarity
+# Realistic Shift Lifecycle
 
-## 1. Make the three modes actually different
+Build out the simulation day in two phases so it behaves like a real dispatch shift instead of a flat 9-hour reactive window.
 
-Gate dispatch behaviour in `stepTick` on `systemMode`:
+EOD = 17:00, full freeze = 17:30 (30-min wind-down). Longest single job ~135 min, so anything queued after ~15:00 risks not finishing in-day.
 
-- **Manual** — no auto-dispatch. New `queued` jobs stay unassigned until the dispatcher accepts a recommendation or assigns by hand. AI still generates recommendations.
-- **Copilot** — auto-dispatch *initial* assignment only (a `queued` job with no engineer gets routed to the best-scoring engineer). Any **reassignment** of an already-assigned job requires the dispatcher to accept a recommendation.
-- **Autopilot** — Copilot behaviour + auto-accept top recommendations, subject to guardrails (below).
+---
 
-## 2. Autopilot guardrails (stop the reassignment thrash)
+## Phase A — Pre-shift Planning + Wind-down
 
-- Never reassign a job that is `in_progress` or already `en_route` with >50% travel done.
-- Add `lastReassignedTick` to `Job`; cooldown of >=18 sim-min before the same job can be reassigned again.
-- Per-engineer cooldown: an engineer can be the *source* or *target* of at most one auto-reassign every 3 ticks.
-- Cap auto-accepts to **1 per tick**, and only if `slaImprovement >= 15` or `riskScore >= 70`.
-- Rebalance recs skip any job that's already moving.
+### 1. Pre-shift planning pass (07:55, runs on `reset()`)
+- Seed engineers and build a backlog from `seedJobs(10)`.
+- Sort backlog by priority weight, then earliest `slaDeadlineTick`.
+- Greedy assign via existing `pickBestEngineer` (SLA-aware) so every engineer starts the day with a visible route on the Gantt.
+- Jobs that don't fit before EOD stay `queued` with `assignedEngineer = null` — picked up by in-day dispatch or rolled to tomorrow.
+- Emit a synthetic "Pre-shift plan ready" event.
 
-## 3. Smarter dispatch scoring (applies to all modes)
+### 2. Wind-down window (16:00 → 17:00)
+- Add `dayPhase` to `SimState`: `preshift | active | winddown | eod`.
+- During wind-down, low/medium queued jobs only assign if `etaCompletionTick <= EOD_TICK`. Otherwise leave queued and mark `rollToTomorrow = true`, emit "Deferred to tomorrow — customer notified" event.
+- Critical jobs still try to assign before EOD; if none fits, fall through to the OT path (Phase B).
 
-Replace raw-distance scoring in `pickBestEngineer` with a "soonest available" ETA:
+### 3. EOD freeze (17:00+)
+- `injectionChance = 0`, auto-dispatch disabled.
+- In-progress jobs keep ticking to completion.
+- Idle / finished engineers flip to new status `off_shift` (rendered grey in EngineerPanel).
 
-```
-engineerAvailableInMin =
-    remainingTravelToCurrentDest
-  + remainingWorkOnCurrentJob
-  + sum(durationBase / speedFactor for j in nextJobs)
+---
 
-travelToNewJobMin = distance(engineer.lastKnownEnd, job.location)
-                    / (32 * speedFactor)
-                    * trafficMultiplierAlongPath   // NEW
+## Phase B — Overtime opt-in + Overnight carry-over
 
-jobDurationMin    = job.durationBase / speedFactor
-                    * (1.0 if skillMatch else 1.25)
+### 4. Overtime opt-in
+- Add `overtimeWilling: boolean` to `Engineer` (~50% true, seeded).
+- During wind-down, critical/high queued jobs that can't fit pre-EOD get a second assignment pass restricted to `overtimeWilling === true` engineers. Each willing engineer takes at most one OT job.
+- After EOD, OT-flagged engineers stay `working` / `en_route` until their OT job finishes, then flip to `off_shift`.
+- UI: "OT" chip on engineer card and on the OT job's Gantt bar; small willingness dot on each engineer.
 
-score = -(engineerAvailableInMin + travelToNewJobMin)
-      + skillBonus
-      - queuePenalty (existing MAX_QUEUE cap stays)
-      - fatiguePenalty
-```
+### 5. Overnight carry-over
+- Add `SimState.carriedJobs` and `SimState.dayNumber`.
+- At EOD, snapshot any still-open jobs (`queued | assigned | en_route | in_progress`) into `carriedJobs` with bumped priority and a `carriedFromDay` marker.
+- New "Start Day N+1" button calls `reset({ keepCarry: true })`, which increments `dayNumber`, re-seeds engineers, and runs `planPreShift(seedJobs(10) + carriedJobs)`.
+- JobRiskPanel shows a "Carry-over · Day N" badge on carried jobs.
 
-`trafficMultiplierAlongPath` samples the existing `traffic` zones on the line between engineer and job — if the path passes through a zone, multiply that segment by the zone's `multiplier`. Same helper is reused by `computeRecommendations` so reasoning text can say things like:
-
-> *"Hugo can start in 8 min (clear route) vs Aria in 34 min (×1.8 traffic on Central). Cuts SLA risk 42%."*
-
-## 4. Honest metrics
-
-- `revenueProtected` only increments when a job that was the target of an accepted AI action **actually completes on time**. Track via `aiAssistedJobs: string[]` on `SimState`.
-- Rename header counter from "AI accepted" to "AI actions" so accepted-but-undone work doesn't read as a win.
-- `travelSavedMin` only credits when the reassigned job completes (same rule).
-
-## 5. UX surfacing
-
-- **Header mode buttons** — tooltips:
-  - Manual: *"You assign every job. AI suggests but never acts."*
-  - Copilot: *"AI auto-assigns new jobs. Reassignments need your approval."*
-  - Autopilot: *"AI auto-assigns and auto-accepts safe reassignments. Critical actions still queue for approval."*
-- **OptimiserPanel** — show "Approval required" pill in Copilot/Manual, "Auto-executing" pill in Autopilot.
-- **JobRiskPanel** — "Awaiting dispatch" tag for `queued` jobs with no engineer (Manual mode will produce many).
-- **EngineerPanel** — show each engineer's "Next available in: Xm" so dispatchers can sanity-check why the AI picked who it picked.
-- **LiveMap traffic zones** — add a tooltip / legend entry explaining the red circles:
-  - Add a legend row: *"Red zone · live traffic · ×N = travel time multiplier"*
-  - On hover over a zone, show `Traffic congestion · ×1.8 travel time · clears at 14:32`.
-  - Engineer route lines that cross a zone render in a warmer colour so it's visible at a glance.
+---
 
 ## Files to touch
 
-- `src/lib/simulation/store.ts` — mode-gated dispatch, autopilot guardrails, cooldowns, ETA/traffic-aware scoring, deferred revenue credit.
-- `src/lib/simulation/types.ts` — `lastReassignedTick` on `Job`, `aiAssistedJobs: string[]` on `SimState`.
-- `src/components/layout/AppShell.tsx` — mode tooltips, rename "AI accepted" → "AI actions".
-- `src/components/tower/OptimiserPanel.tsx` — Approval / Auto-executing pills.
-- `src/components/tower/JobRiskPanel.tsx` — "Awaiting dispatch" tag.
-- `src/components/tower/EngineerPanel.tsx` — "Next available in" line.
-- `src/components/tower/LiveMap.tsx` — zone hover tooltip, expanded legend, warm-tint route lines through zones.
+- `src/lib/simulation/types.ts` — `dayPhase`, `overtimeWilling`, `overtime`, `carriedFromDay`, `carriedJobs`, `dayNumber`, `off_shift` engineer status.
+- `src/lib/simulation/store.ts` — `planPreShift()`, `dayPhase` computation, wind-down gating, EOD freeze, OT pass, carry-over snapshot, day counter.
+- `src/lib/simulation/seed.ts` — `overtimeWilling` in `seedEngineers`.
+- `src/components/layout/AppShell.tsx` — phase pill (PRE-SHIFT / ACTIVE / WIND-DOWN / EOD).
+- `src/components/tower/EngineerPanel.tsx` — OT chip, willingness dot, grey `off_shift` styling.
+- `src/components/tower/JobRiskPanel.tsx` — carry-over badge, "deferred" indicator.
+- `src/routes/simulation.tsx` — "Start Day N+1" button.
 
-## What you should see after the changes
+---
 
-- Switching to **Manual** leaves new jobs visibly unassigned until you act — clear behavioural difference.
-- **Copilot** auto-routes new jobs but never yanks one mid-flight; the recommendations queue is where reassignments live.
-- **Autopilot** at 5pm looks busy but coherent — at most a handful of auto-reassigns per minute, no job ping-ponging between engineers, `revenueProtected` only ticks up when jobs actually land on time.
-- Hovering a red circle on the map explains it's a traffic zone and what the multiplier means; the optimiser's reasoning text references those zones when they affect routing.
+## Order of work
+
+1. Phase A (planning + wind-down + freeze) — makes the day feel like a real shift.
+2. Phase B (OT + carry-over) — adds the human/operational realism on top.

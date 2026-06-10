@@ -1,8 +1,9 @@
 export type Skill = "electrical" | "hvac" | "plumbing" | "network" | "mechanical";
 
-export type EngineerStatus = "en_route" | "working" | "idle" | "delayed";
+export type EngineerStatus = "en_route" | "working" | "idle" | "delayed" | "off_shift";
 export type JobStatus = "queued" | "assigned" | "en_route" | "in_progress" | "completed" | "breached";
 export type JobPriority = "low" | "medium" | "high" | "critical";
+export type DayPhase = "preshift" | "active" | "winddown" | "eod";
 
 export interface Engineer {
   id: string;
@@ -20,6 +21,8 @@ export interface Engineer {
   nextJobs: string[];
   delayUntil: number | null;
   lastAutoActionTick?: number;
+  overtimeWilling: boolean;
+  overtime?: boolean;
 }
 
 export interface Job {
@@ -40,6 +43,8 @@ export interface Job {
   status: JobStatus;
   assignedEngineer: string | null;
   lastReassignedTick?: number;
+  rollToTomorrow?: boolean;
+  carriedFromDay?: number;
 }
 
 export interface TrafficZone {
@@ -105,6 +110,9 @@ export interface SimState {
   recommendations: AIRecommendation[];
   dismissedRecs: string[];
   dayEnded: boolean;
+  dayPhase: DayPhase;
+  dayNumber: number;
+  carriedJobs: Job[];
   events: SimEvent[];
   aiAssistedJobs: Record<string, { revenue: number; travel: number }>;
   metrics: {

@@ -57,6 +57,7 @@ export function seedEngineers(count = 8, rng = makeRng(42)): Engineer[] {
       currentJob: null,
       nextJobs: [],
       delayUntil: null,
+      overtimeWilling: rng() < 0.5,
     });
   }
   return engineers;

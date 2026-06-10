@@ -28,11 +28,21 @@ export function JobRiskPanel() {
               }`}
               style={{ borderLeftWidth: 3, borderLeftColor: band.color }}
             >
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="font-mono text-xs font-bold">{j.id}</span>
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: priorityColor(j.priority) }} />
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{j.priority}</span>
-                {!j.assignedEngineer && (
+                {j.carriedFromDay !== undefined && (
+                  <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
+                    Carry-over · Day {j.carriedFromDay}
+                  </span>
+                )}
+                {j.rollToTomorrow && (
+                  <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-muted-foreground/15 text-muted-foreground">
+                    Deferred
+                  </span>
+                )}
+                {!j.assignedEngineer && !j.rollToTomorrow && (
                   <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-status-warn/15 text-status-warn">
                     {systemMode === "manual" ? "Awaiting dispatch" : "Unassigned · no capacity"}
                   </span>

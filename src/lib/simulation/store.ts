@@ -8,13 +8,15 @@ import type {
   TrafficZone,
   SystemMode,
   SimMode,
+  DayPhase,
 } from "./types";
 import { makeRng, seedEngineers, seedJobs, newJob } from "./seed";
 
 const TICK_MS = 1500; // base tick ~1.5s real-time = "5-15s operational moment"
 const SIM_MINUTES_PER_TICK = 3;
-const DAY_END_MIN = 540; // 17:00 (08:00 + 9h)
-const WIND_DOWN_MIN = 30; // allow 30 sim-min of completion after EOD
+const WIND_DOWN_START_MIN = 480; // 16:00 — start gating new low/medium dispatch
+const DAY_END_MIN = 540; // 17:00 — no new dispatch (except OT continuing)
+const FREEZE_MIN = 570; // 17:30 — fully stop the loop
 const MAX_QUEUE = 3; // max jobs (current + queued) per engineer
 
 let rng = makeRng(7);
@@ -22,6 +24,12 @@ let eventCounter = 0;
 let recCounter = 0;
 let jobCounter = 100;
 let tickHandle: ReturnType<typeof setTimeout> | null = null;
+
+function computeDayPhase(simTimeMinutes: number): DayPhase {
+  if (simTimeMinutes >= DAY_END_MIN) return "eod";
+  if (simTimeMinutes >= WIND_DOWN_START_MIN) return "winddown";
+  return "active";
+}
 
 function uid(p: string) {
   eventCounter++;
@@ -108,6 +116,7 @@ interface Actions {
   setSimMode: (m: SimMode) => void;
   freeze: () => void;
   reset: (seed?: number) => void;
+  startNextDay: () => void;
   injectEmergency: () => void;
   recomputeAll: () => void;
   resolveSlaRisks: () => void;
@@ -119,8 +128,39 @@ interface Actions {
   tickOnce: () => void;
 }
 
+// Greedy pre-shift planner: assigns the starting backlog to engineers before 08:00
+// so every engineer begins the day with a visible route. Mutates inputs.
+function planPreShift(engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]): number {
+  const priWeight = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+  const backlog = jobs
+    .filter((j) => j.status === "queued" && !j.assignedEngineer)
+    .sort((a, b) => {
+      const pa = priWeight[a.priority], pb = priWeight[b.priority];
+      if (pa !== pb) return pa - pb;
+      return a.slaDeadlineTick - b.slaDeadlineTick;
+    });
+  let assigned = 0;
+  for (const job of backlog) {
+    const cand = pickBestEngineer(job, engineers, jobs, traffic, 0);
+    if (!cand) continue;
+    job.assignedEngineer = cand.id;
+    if (!cand.currentJob) {
+      cand.currentJob = job.id;
+      cand.destination = job.location;
+      cand.status = "en_route";
+      job.status = "en_route";
+    } else {
+      cand.nextJobs.push(job.id);
+      job.status = "assigned";
+    }
+    assigned++;
+  }
+  return assigned;
+}
+
 const initialEngineers = seedEngineers(8);
 const initialJobs = seedJobs(10);
+planPreShift(initialEngineers, initialJobs, []);
 
 export const useSim = create<SimState & Actions>((set, get) => ({
   tick: 0,
@@ -136,14 +176,17 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   recommendations: [],
   dismissedRecs: [],
   dayEnded: false,
+  dayPhase: "active",
+  dayNumber: 1,
+  carriedJobs: [],
   aiAssistedJobs: {},
 
   events: [{
     id: uid("ev"),
     tick: 0,
     kind: "tick",
-    message: "Control tower online. Optimal plan generated for 08:00 shift.",
-    severity: "info",
+    message: "Pre-shift plan ready · 08:00 routes dispatched.",
+    severity: "ok",
   }],
   metrics: {
     slaHealth: 100,
@@ -181,17 +224,26 @@ export const useSim = create<SimState & Actions>((set, get) => ({
     rng = makeRng(seed);
     jobCounter = 100;
     get().stop();
+    const engineers = seedEngineers(8, makeRng(seed + 1));
+    const jobs = seedJobs(10, makeRng(seed + 2));
+    const assigned = planPreShift(engineers, jobs, []);
     set({
       tick: 0,
       simTimeMinutes: 0,
-      engineers: seedEngineers(8, makeRng(seed + 1)),
-      jobs: seedJobs(10, makeRng(seed + 2)),
+      engineers,
+      jobs,
       traffic: [],
       recommendations: [],
       dismissedRecs: [],
       dayEnded: false,
+      dayPhase: "active",
+      dayNumber: 1,
+      carriedJobs: [],
       aiAssistedJobs: {},
-      events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
+      events: [{
+        id: uid("ev"), tick: 0, kind: "ai_recommendation", severity: "ok",
+        message: `Pre-shift plan ready · ${assigned}/${jobs.length} jobs routed before 08:00.`,
+      }],
 
       metrics: {
         slaHealth: 100, completed: 0, breached: 0, revenueProtected: 0,
@@ -201,6 +253,62 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       selectedEngineer: null,
       selectedJob: null,
     });
+  },
+  startNextDay: () => {
+    const s = get();
+    const carry = s.carriedJobs;
+    rng = makeRng(7 + s.dayNumber);
+    jobCounter = 100 + s.dayNumber * 100;
+    get().stop();
+    const engineers = seedEngineers(8, makeRng(11 + s.dayNumber));
+    const fresh = seedJobs(10, makeRng(23 + s.dayNumber));
+    // Re-id carried jobs into new day numbering and reset progress/SLA
+    const carried = carry.map((j) => {
+      const workTicks = Math.ceil(j.durationBase / SIM_MINUTES_PER_TICK);
+      const slack = j.priority === "critical" ? 18 : j.priority === "high" ? 26 : 36;
+      const bumped: Job["priority"] =
+        j.priority === "low" ? "medium" : j.priority === "medium" ? "high" : "critical";
+      return {
+        ...j,
+        progress: 0,
+        status: "queued" as Job["status"],
+        assignedEngineer: null,
+        spawnTick: 0,
+        slaDeadlineTick: workTicks + slack,
+        riskScore: 25,
+        priority: bumped,
+        rollToTomorrow: false,
+        carriedFromDay: (j.carriedFromDay ?? s.dayNumber),
+      };
+    });
+    const jobs = [...carried, ...fresh];
+    const assigned = planPreShift(engineers, jobs, []);
+    set({
+      tick: 0,
+      simTimeMinutes: 0,
+      engineers,
+      jobs,
+      traffic: [],
+      recommendations: [],
+      dismissedRecs: [],
+      dayEnded: false,
+      dayPhase: "active",
+      dayNumber: s.dayNumber + 1,
+      carriedJobs: [],
+      aiAssistedJobs: {},
+      events: [{
+        id: uid("ev"), tick: 0, kind: "ai_recommendation", severity: "ok",
+        message: `Day ${s.dayNumber + 1} pre-shift · ${carried.length} carried + ${fresh.length} new · ${assigned} routed.`,
+      }],
+      metrics: {
+        slaHealth: 100, completed: 0, breached: 0, revenueProtected: 0,
+        travelSavedMin: 0, aiAcceptedCount: 0, manualBaselineSla: 84,
+      },
+      frozen: false,
+      selectedEngineer: null,
+      selectedJob: null,
+    });
+    get().start();
   },
   injectEmergency: () => {
     set((s) => {
@@ -339,33 +447,91 @@ function stepTick() {
   let metricsDelta = { revenueProtected: 0, travelSavedMin: 0, aiAcceptedCount: 0 };
 
 
-  // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned)
-  // Process most-urgent first: critical priority, then earliest SLA deadline.
-  if (s.systemMode !== "manual") {
+  const dayPhase: DayPhase = computeDayPhase(simTimeMinutes);
+
+  // Auto-assign queued jobs to best idle engineer (Copilot/Autopilot only — Manual leaves them unassigned).
+  // During wind-down (16:00-17:00), low/medium jobs only assign if they can finish by EOD; otherwise
+  // they roll to tomorrow. Critical/high jobs that can't fit get a second pass on OT-willing engineers.
+  // After EOD (17:00+), no new dispatch at all — in-flight jobs (including OT) keep ticking.
+  if (s.systemMode !== "manual" && dayPhase !== "eod") {
     const priWeight = { critical: 0, high: 1, medium: 2, low: 3 } as const;
     const queuedSorted = jobs
-      .filter((j) => j.status === "queued")
+      .filter((j) => j.status === "queued" && !j.rollToTomorrow)
       .sort((a, b) => {
         const pa = priWeight[a.priority], pb = priWeight[b.priority];
         if (pa !== pb) return pa - pb;
         return a.slaDeadlineTick - b.slaDeadlineTick;
       });
+
+    const fitsBeforeEOD = (cand: Engineer, job: Job): boolean => {
+      const etaMin =
+        engineerAvailableMin(cand, jobs, traffic) +
+        travelToJobMin(cand, job, traffic, jobs) +
+        job.durationBase / Math.max(0.4, cand.speedFactor);
+      return simTimeMinutes + etaMin <= DAY_END_MIN;
+    };
+
+    const assignTo = (cand: Engineer, job: Job, isOT = false) => {
+      job.assignedEngineer = cand.id;
+      if (!cand.currentJob) {
+        cand.currentJob = job.id;
+        cand.destination = job.location;
+        cand.status = "en_route";
+        job.status = "en_route";
+      } else {
+        cand.nextJobs.push(job.id);
+        job.status = "assigned";
+      }
+      if (isOT) cand.overtime = true;
+    };
+
     for (const job of queuedSorted) {
       const candidate = pickBestEngineer(job, engineers, jobs, traffic, tick);
-      if (candidate) {
-        job.assignedEngineer = candidate.id;
-        if (!candidate.currentJob) {
-          candidate.currentJob = job.id;
-          candidate.destination = job.location;
-          candidate.status = "en_route";
-          job.status = "en_route";
-        } else {
-          candidate.nextJobs.push(job.id);
-          job.status = "assigned";
+      if (!candidate) continue;
+
+      if (dayPhase === "winddown" && !fitsBeforeEOD(candidate, job)) {
+        // Low/medium: defer to tomorrow
+        if (job.priority === "low" || job.priority === "medium") {
+          job.rollToTomorrow = true;
+          events = pushEvent(events, {
+            tick, kind: "tick", severity: "warn",
+            message: `${job.id} deferred to tomorrow — customer ${job.customer} notified.`,
+          });
+          continue;
         }
+        // Critical/high: try OT-willing engineer that hasn't taken OT yet
+        const otCand = engineers
+          .filter((e) => e.overtimeWilling && !e.overtime && e.status !== "delayed")
+          .filter((e) => (e.currentJob ? 1 : 0) + e.nextJobs.length < MAX_QUEUE)
+          .sort((a, b) => engineerAvailableMin(a, jobs, traffic) - engineerAvailableMin(b, jobs, traffic))[0];
+        if (otCand) {
+          assignTo(otCand, job, true);
+          events = pushEvent(events, {
+            tick, kind: "reassigned", severity: "warn",
+            message: `OT dispatch: ${otCand.name.split(" ")[0]} taking ${job.id} (${job.priority}) past 17:00.`,
+          });
+        } else {
+          job.rollToTomorrow = true;
+          events = pushEvent(events, {
+            tick, kind: "sla_breach", severity: "risk",
+            message: `${job.id} (${job.priority}) deferred — no OT capacity; ${job.customer} notified.`,
+          });
+        }
+        continue;
       }
+
+      assignTo(candidate, job);
     }
   }
+
+  // Flip idle engineers to off_shift once EOD hits and they have no in-flight work
+  if (dayPhase === "eod") {
+    for (const e of engineers) {
+      const hasWork = e.currentJob || e.nextJobs.length > 0 || e.status === "en_route";
+      if (!hasWork && e.status !== "off_shift") e.status = "off_shift";
+    }
+  }
+
 
   // Engineer movement + delays
   const stressFactor = s.simMode === "stress" ? 2.2 : 1;
@@ -497,15 +663,16 @@ function stepTick() {
     });
   }
 
-  // Day window — stop injection past EOD, and back-pressure during the day
+  // Day window — stop injection at wind-down start, and back-pressure during the day
+  const pastWindDown = simTimeMinutes >= WIND_DOWN_START_MIN;
   const pastEOD = simTimeMinutes >= DAY_END_MIN;
   const openCount = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
   const capacity = engineers.length * MAX_QUEUE;
   const loadRatio = Math.min(1, openCount / Math.max(1, capacity));
   const backPressure = Math.max(0, 1 - loadRatio);
 
-  // Job injection
-  if (!pastEOD) {
+  // Job injection — no new bookings once wind-down starts
+  if (!pastWindDown) {
     const base = s.simMode === "stress" ? 0.4 : 0.08;
     const floor = s.simMode === "stress" ? 0.12 : 0;
     const injectionChance = Math.max(floor, base * backPressure);
@@ -530,6 +697,7 @@ function stepTick() {
       });
     }
   }
+
 
   // Scripted demo waypoints
   if (s.simMode === "scripted" && !pastEOD) {
@@ -648,21 +816,28 @@ function stepTick() {
     ? [...dismissedRecs, ...autoDismissed.filter((id) => !dismissedRecs.includes(id))]
     : dismissedRecs;
 
-  // End-of-day handling
+  // End-of-day handling — snapshot carry-over at the freeze boundary
   let dayEnded = s.dayEnded;
-  if (!dayEnded && simTimeMinutes >= DAY_END_MIN + WIND_DOWN_MIN) {
+  let carriedJobs = s.carriedJobs;
+  if (!dayEnded && simTimeMinutes >= FREEZE_MIN) {
     dayEnded = true;
-    const openLeft = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
+    const openLeft = jobs.filter((j) => j.status !== "completed" && j.status !== "breached");
+    carriedJobs = openLeft.map((j) => ({ ...j }));
     events = pushEvent(events, {
       tick, kind: "tick", severity: "info",
-      message: `🛑 End of Day 17:30 — ${metrics.completed} completed · ${metrics.breached} breached · ${openLeft} carried over · £${metrics.revenueProtected} protected`,
+      message: `🛑 End of Day ${s.dayNumber} 17:30 — ${metrics.completed} completed · ${metrics.breached} breached · ${openLeft.length} carried over · £${metrics.revenueProtected} protected`,
     });
     // pause loop on next frame
     setTimeout(() => useSim.getState().stop(), 0);
-  } else if (!dayEnded && simTimeMinutes === DAY_END_MIN) {
+  } else if (!dayEnded && s.simTimeMinutes < DAY_END_MIN && simTimeMinutes >= DAY_END_MIN) {
     events = pushEvent(events, {
       tick, kind: "tick", severity: "warn",
-      message: `17:00 — End of shift. No new bookings; engineers winding down in-flight work.`,
+      message: `17:00 — End of shift. OT engineers completing in-flight work; others standing down.`,
+    });
+  } else if (!dayEnded && s.simTimeMinutes < WIND_DOWN_START_MIN && simTimeMinutes >= WIND_DOWN_START_MIN) {
+    events = pushEvent(events, {
+      tick, kind: "tick", severity: "info",
+      message: `16:00 — Wind-down. New low/medium jobs deferred to tomorrow unless they fit before 17:00.`,
     });
   }
 
@@ -677,6 +852,8 @@ function stepTick() {
     recommendations: mergedRecs,
     dismissedRecs: nextDismissed,
     dayEnded,
+    dayPhase,
+    carriedJobs,
     aiAssistedJobs,
   });
 }
@@ -690,7 +867,7 @@ export function pickBestEngineer(job: Job, engineers: Engineer[], jobs: Job[], t
   let bestScore = -Infinity;
   const slaMinRemaining = (job.slaDeadlineTick - currentTick) * SIM_MINUTES_PER_TICK;
   for (const e of engineers) {
-    if (e.status === "delayed") continue;
+    if (e.status === "delayed" || e.status === "off_shift") continue;
     const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
     if (load >= MAX_QUEUE) continue;
     const skillMatch = e.skills.includes(job.skill) ? 1 : 0.4;
@@ -739,7 +916,7 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
     let bestTrafficMult = 1;
     for (const e of s.engineers) {
       if (e.id === job.assignedEngineer) continue;
-      if (e.status === "delayed") continue;
+      if (e.status === "delayed" || e.status === "off_shift") continue;
       const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
       if (load >= MAX_QUEUE) continue;
       const skillMatch = e.skills.includes(job.skill) ? 1 : 0.5;
