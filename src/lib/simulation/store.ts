@@ -160,6 +160,7 @@ function planPreShift(engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]
 
 const initialEngineers = seedEngineers(8);
 const initialJobs = seedJobs(10);
+planPreShift(initialEngineers, initialJobs, []);
 
 export const useSim = create<SimState & Actions>((set, get) => ({
   tick: 0,
@@ -175,14 +176,17 @@ export const useSim = create<SimState & Actions>((set, get) => ({
   recommendations: [],
   dismissedRecs: [],
   dayEnded: false,
+  dayPhase: "active",
+  dayNumber: 1,
+  carriedJobs: [],
   aiAssistedJobs: {},
 
   events: [{
     id: uid("ev"),
     tick: 0,
     kind: "tick",
-    message: "Control tower online. Optimal plan generated for 08:00 shift.",
-    severity: "info",
+    message: "Pre-shift plan ready · 08:00 routes dispatched.",
+    severity: "ok",
   }],
   metrics: {
     slaHealth: 100,
