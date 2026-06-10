@@ -1,8 +1,9 @@
 export type Skill = "electrical" | "hvac" | "plumbing" | "network" | "mechanical";
 
-export type EngineerStatus = "en_route" | "working" | "idle" | "delayed";
+export type EngineerStatus = "en_route" | "working" | "idle" | "delayed" | "off_shift";
 export type JobStatus = "queued" | "assigned" | "en_route" | "in_progress" | "completed" | "breached";
 export type JobPriority = "low" | "medium" | "high" | "critical";
+export type DayPhase = "preshift" | "active" | "winddown" | "eod";
 
 export interface Engineer {
   id: string;
