@@ -116,6 +116,7 @@ interface Actions {
   setSimMode: (m: SimMode) => void;
   freeze: () => void;
   reset: (seed?: number) => void;
+  startNextDay: () => void;
   injectEmergency: () => void;
   recomputeAll: () => void;
   resolveSlaRisks: () => void;
@@ -125,6 +126,36 @@ interface Actions {
   selectEngineer: (id: string | null) => void;
   selectJob: (id: string | null) => void;
   tickOnce: () => void;
+}
+
+// Greedy pre-shift planner: assigns the starting backlog to engineers before 08:00
+// so every engineer begins the day with a visible route. Mutates inputs.
+function planPreShift(engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]): number {
+  const priWeight = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+  const backlog = jobs
+    .filter((j) => j.status === "queued" && !j.assignedEngineer)
+    .sort((a, b) => {
+      const pa = priWeight[a.priority], pb = priWeight[b.priority];
+      if (pa !== pb) return pa - pb;
+      return a.slaDeadlineTick - b.slaDeadlineTick;
+    });
+  let assigned = 0;
+  for (const job of backlog) {
+    const cand = pickBestEngineer(job, engineers, jobs, traffic, 0);
+    if (!cand) continue;
+    job.assignedEngineer = cand.id;
+    if (!cand.currentJob) {
+      cand.currentJob = job.id;
+      cand.destination = job.location;
+      cand.status = "en_route";
+      job.status = "en_route";
+    } else {
+      cand.nextJobs.push(job.id);
+      job.status = "assigned";
+    }
+    assigned++;
+  }
+  return assigned;
 }
 
 const initialEngineers = seedEngineers(8);
