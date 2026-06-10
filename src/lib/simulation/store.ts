@@ -916,7 +916,7 @@ function computeRecommendations(s: SimState): AIRecommendation[] {
     let bestTrafficMult = 1;
     for (const e of s.engineers) {
       if (e.id === job.assignedEngineer) continue;
-      if (e.status === "delayed") continue;
+      if (e.status === "delayed" || e.status === "off_shift") continue;
       const load = (e.currentJob ? 1 : 0) + e.nextJobs.length;
       if (load >= MAX_QUEUE) continue;
       const skillMatch = e.skills.includes(job.skill) ? 1 : 0.5;
