@@ -663,15 +663,16 @@ function stepTick() {
     });
   }
 
-  // Day window — stop injection past EOD, and back-pressure during the day
+  // Day window — stop injection at wind-down start, and back-pressure during the day
+  const pastWindDown = simTimeMinutes >= WIND_DOWN_START_MIN;
   const pastEOD = simTimeMinutes >= DAY_END_MIN;
   const openCount = jobs.filter((j) => j.status !== "completed" && j.status !== "breached").length;
   const capacity = engineers.length * MAX_QUEUE;
   const loadRatio = Math.min(1, openCount / Math.max(1, capacity));
   const backPressure = Math.max(0, 1 - loadRatio);
 
-  // Job injection
-  if (!pastEOD) {
+  // Job injection — no new bookings once wind-down starts
+  if (!pastWindDown) {
     const base = s.simMode === "stress" ? 0.4 : 0.08;
     const floor = s.simMode === "stress" ? 0.12 : 0;
     const injectionChance = Math.max(floor, base * backPressure);
@@ -696,6 +697,7 @@ function stepTick() {
       });
     }
   }
+
 
   // Scripted demo waypoints
   if (s.simMode === "scripted" && !pastEOD) {
