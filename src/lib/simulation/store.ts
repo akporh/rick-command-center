@@ -224,17 +224,26 @@ export const useSim = create<SimState & Actions>((set, get) => ({
     rng = makeRng(seed);
     jobCounter = 100;
     get().stop();
+    const engineers = seedEngineers(8, makeRng(seed + 1));
+    const jobs = seedJobs(10, makeRng(seed + 2));
+    const assigned = planPreShift(engineers, jobs, []);
     set({
       tick: 0,
       simTimeMinutes: 0,
-      engineers: seedEngineers(8, makeRng(seed + 1)),
-      jobs: seedJobs(10, makeRng(seed + 2)),
+      engineers,
+      jobs,
       traffic: [],
       recommendations: [],
       dismissedRecs: [],
       dayEnded: false,
+      dayPhase: "active",
+      dayNumber: 1,
+      carriedJobs: [],
       aiAssistedJobs: {},
-      events: [{ id: uid("ev"), tick: 0, kind: "tick", message: "Simulation reset.", severity: "info" }],
+      events: [{
+        id: uid("ev"), tick: 0, kind: "ai_recommendation", severity: "ok",
+        message: `Pre-shift plan ready · ${assigned}/${jobs.length} jobs routed before 08:00.`,
+      }],
 
       metrics: {
         slaHealth: 100, completed: 0, breached: 0, revenueProtected: 0,
@@ -244,6 +253,62 @@ export const useSim = create<SimState & Actions>((set, get) => ({
       selectedEngineer: null,
       selectedJob: null,
     });
+  },
+  startNextDay: () => {
+    const s = get();
+    const carry = s.carriedJobs;
+    rng = makeRng(7 + s.dayNumber);
+    jobCounter = 100 + s.dayNumber * 100;
+    get().stop();
+    const engineers = seedEngineers(8, makeRng(11 + s.dayNumber));
+    const fresh = seedJobs(10, makeRng(23 + s.dayNumber));
+    // Re-id carried jobs into new day numbering and reset progress/SLA
+    const carried = carry.map((j) => {
+      const workTicks = Math.ceil(j.durationBase / SIM_MINUTES_PER_TICK);
+      const slack = j.priority === "critical" ? 18 : j.priority === "high" ? 26 : 36;
+      const bumped: Job["priority"] =
+        j.priority === "low" ? "medium" : j.priority === "medium" ? "high" : "critical";
+      return {
+        ...j,
+        progress: 0,
+        status: "queued" as Job["status"],
+        assignedEngineer: null,
+        spawnTick: 0,
+        slaDeadlineTick: workTicks + slack,
+        riskScore: 25,
+        priority: bumped,
+        rollToTomorrow: false,
+        carriedFromDay: (j.carriedFromDay ?? s.dayNumber),
+      };
+    });
+    const jobs = [...carried, ...fresh];
+    const assigned = planPreShift(engineers, jobs, []);
+    set({
+      tick: 0,
+      simTimeMinutes: 0,
+      engineers,
+      jobs,
+      traffic: [],
+      recommendations: [],
+      dismissedRecs: [],
+      dayEnded: false,
+      dayPhase: "active",
+      dayNumber: s.dayNumber + 1,
+      carriedJobs: [],
+      aiAssistedJobs: {},
+      events: [{
+        id: uid("ev"), tick: 0, kind: "ai_recommendation", severity: "ok",
+        message: `Day ${s.dayNumber + 1} pre-shift · ${carried.length} carried + ${fresh.length} new · ${assigned} routed.`,
+      }],
+      metrics: {
+        slaHealth: 100, completed: 0, breached: 0, revenueProtected: 0,
+        travelSavedMin: 0, aiAcceptedCount: 0, manualBaselineSla: 84,
+      },
+      frozen: false,
+      selectedEngineer: null,
+      selectedJob: null,
+    });
+    get().start();
   },
   injectEmergency: () => {
     set((s) => {
