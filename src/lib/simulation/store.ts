@@ -128,8 +128,10 @@ interface Actions {
   tickOnce: () => void;
 }
 
-// Greedy pre-shift planner: assigns the starting backlog to engineers before 08:00
-// so every engineer begins the day with a visible route. Mutates inputs.
+// Pre-shift planner: seeds each engineer with ONE starting job at 08:00 so the
+// board isn't empty on load. The rest of the backlog stays queued and gets
+// dispatched tick-by-tick as engineers free up — queuing 2-deep up front was
+// burning SLA on the second job before its engineer could even start.
 function planPreShift(engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]): number {
   const priWeight = { critical: 0, high: 1, medium: 2, low: 3 } as const;
   const backlog = jobs
@@ -141,18 +143,15 @@ function planPreShift(engineers: Engineer[], jobs: Job[], traffic: TrafficZone[]
     });
   let assigned = 0;
   for (const job of backlog) {
-    const cand = pickBestEngineer(job, engineers, jobs, traffic, 0);
+    const free = engineers.filter((e) => !e.currentJob && e.nextJobs.length === 0 && e.status !== "off_shift");
+    if (free.length === 0) break;
+    const cand = pickBestEngineer(job, free, jobs, traffic, 0);
     if (!cand) continue;
     job.assignedEngineer = cand.id;
-    if (!cand.currentJob) {
-      cand.currentJob = job.id;
-      cand.destination = job.location;
-      cand.status = "en_route";
-      job.status = "en_route";
-    } else {
-      cand.nextJobs.push(job.id);
-      job.status = "assigned";
-    }
+    cand.currentJob = job.id;
+    cand.destination = job.location;
+    cand.status = "en_route";
+    job.status = "en_route";
     assigned++;
   }
   return assigned;
