@@ -30,3 +30,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code / MCP config (may hold tokens)
+.claude/
+.claude.json
+.mcp.json
